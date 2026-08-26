@@ -23,14 +23,15 @@
 | `TRAIN` | Pending | Minimal training loop proven | A tiny subset intentionally overfits; save, reload, and inference reproduce the expected result |
 | `EXP` | Pending | First attributable quality experiment | One hypothesis beats the frozen baseline and survives blind verification without a declared regression |
 | `STREAM` | Pending | Native-streaming baseline and regression gate | Partial/final accuracy, latency, churn, and state reset are reproducible on long streams |
+| `SERVE` | Pending | Versioned ASR backend service for external Apps and clients | Pinned offline and streaming service profiles pass API, isolation, reliability, observability, and load gates |
 | `MAINT` | Recurring | Downstream remains integrable with upstream | Drift is measured and each sync or compatibility decision has evidence |
 
 Execution order:
 
 ```text
-BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01
-                         ^                                |
-                         +------- UP-SYNC recurring ------+
+BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
+                         ^                                             |
+                         +------------ UP-SYNC recurring ---------------+
 ```
 
 ## Task Registry
@@ -43,6 +44,7 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01
 | `TRAIN-01` | Pending | CPU-feasible tiny-training and checkpoint round trip | Forward/backward/update work; loss descends on a tiny subset; saved checkpoint reloads; resulting inference and config lineage are verified |
 | `EXP-01` | Pending | First one-variable contextual-bias experiment | Hypothesis and regression budget declared before results; all seeds reported; dev gain is confirmed on the blind set and error taxonomy explains the change |
 | `STREAM-01` | Pending | Paraformer-Streaming baseline, stream simulator, and long-stream tests | Chunk/look-back/VAD settings fixed; first partial, stable token, finalization, churn, RTF, reset, and boundary accuracy reported |
+| `SERVE-01` | Pending | Downstream-qualified ASR service contract and reproducible deployment profile | External clients use only the versioned API; model/runtime/image revisions are pinned; offline and streaming integration, session isolation, bounded resources, health, recovery, and target-load behavior pass |
 | `MAINT-01` | Done | Bounded progress history, strict experiment provenance, upstream drift monitoring, and source-isolation guard | Active progress is month/record/line bounded; all task references resolve; executed experiments bind reproducible hashes, hardware, command, metrics, and reports; scheduled CI fails on excessive drift or unregistered upstream-core changes |
 | `UP-SYNC` | Scheduled | Recurring upstream drift measurement and controlled integration | Record full SHAs and ahead/behind for mirror main, active develop, and accepted baseline; use `sync/upstream-*`; resolve conflicts without erasing downstream evidence or broadening core patches |
 
@@ -87,6 +89,23 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01
 - Chunking, look-back, caches, VAD, endpointing, and reset semantics are fixed.
 - Long streams include silence, boundary speech, noise, and reconnect cases.
 
+### SERVE Gate
+
+- Offline and native-streaming endpoints publish versioned request, result,
+  partial/final, and error contracts; an external-client integration test uses
+  only those public contracts.
+- Source, model, runtime, image, and effective configuration identities are
+  pinned; health and readiness expose enough revision data to diagnose a run.
+- Concurrent sessions isolate state; finalization, cancellation, disconnect,
+  and reconnect reset caches correctly; queues, buffers, and request sizes are
+  bounded and overload fails explicitly.
+- End-to-end latency, throughput, saturation, failures, and recovery are
+  measured on the target deployment without relabeling model-only benchmarks
+  as service performance.
+- TLS, authentication, rate and payload limits, and audit/retention policy are
+  enforced at the gateway boundary before an App or other external client can
+  reach the ASR service.
+
 ### MAINT Gate
 
 - Active progress contains only its current-month record window; monthly
@@ -105,7 +124,7 @@ current task:
 
 - large Speech-LLM fine-tuning or training from scratch;
 - diarization, punctuation, and inverse-text-normalization optimization;
-- mobile/embedded packaging and platform-specific acceleration;
+- App/client UI, mobile/embedded packaging, and platform-specific acceleration;
 - two-pass streaming plus LLM final correction;
 - replacement of the FunASR training/runtime foundation.
 

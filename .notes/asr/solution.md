@@ -11,6 +11,11 @@ behavior. The first product-shaped target is microphone and meeting speech:
 Mandarin, accents, far field, noise, domain terms, and limited Chinese-English
 code switching.
 
+The product boundary is a versioned ASR backend service that external Apps and
+other clients can call for offline and native-streaming recognition. App UI,
+client business workflows, and mobile application code are outside this
+repository.
+
 ## Technical Decision
 
 Fork `modelscope/FunASR` and hold the first downstream baseline at:
@@ -47,6 +52,29 @@ decode / resample / VAD boundary
 Model output and display post-processing remain separate. The evaluator owns
 reference/hypothesis normalization and reports raw component counts so a text
 normalization change cannot masquerade as an acoustic-model improvement.
+
+## Service Boundary
+
+```text
+external App / client
+        |
+        v
+TLS + authentication + request limits
+        |
+        v
+qualified ASR backend service
+        |
+        v
+pinned upstream runtime + promoted model
+```
+
+The lab owns the ASR service contract, reproducible deployment profile, and
+evidence for accuracy, latency, session isolation, reliability, and capacity.
+Prefer the public upstream API and runtime surfaces; add downstream-owned
+configuration, qualification tests, or a narrow adapter only when the product
+contract requires it. A public gateway or ingress owns TLS, identity, rate and
+payload limits, and audit policy instead of delegating them to an inference
+demo.
 
 ## Research Loop
 

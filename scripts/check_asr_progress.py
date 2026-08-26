@@ -33,7 +33,18 @@ REQUIRED_TASK_IDS = {
     "TRAIN-01",
     "EXP-01",
     "STREAM-01",
+    "SERVE-01",
     "UP-SYNC",
+}
+REQUIRED_STAGE_IDS = {
+    "BOOT",
+    "BASE",
+    "EVAL",
+    "TRAIN",
+    "EXP",
+    "STREAM",
+    "SERVE",
+    "MAINT",
 }
 ALLOWED_TASK_STATUSES = {
     "In Progress",
@@ -44,6 +55,7 @@ ALLOWED_TASK_STATUSES = {
     "Superseded",
     "Blocked",
 }
+ALLOWED_STAGE_STATUSES = {"Done", "Current", "Pending", "Recurring"}
 TERMINAL_STATUSES = {"Done", "Cancelled", "Superseded"}
 TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*-(?:\d{2}|SYNC)$")
 TASK_LIKE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
@@ -193,6 +205,7 @@ def _parse_roadmap_rows(
     text: str, errors: list[str]
 ) -> tuple[dict[str, TaskRow], list[str]]:
     tasks: dict[str, TaskRow] = {}
+    stages: set[str] = set()
     current_stages: list[str] = []
 
     for identifier, status, line_number in _table_rows(text):
@@ -212,14 +225,24 @@ def _parse_roadmap_rows(
                 f"roadmap: malformed task ID {identifier!r} at line {line_number}; "
                 "use STAGE-NN or UP-SYNC"
             )
-        elif STAGE_ID_RE.fullmatch(identifier) and status == "Current":
-            current_stages.append(identifier)
+        elif (
+            STAGE_ID_RE.fullmatch(identifier)
+            and status in ALLOWED_STAGE_STATUSES
+        ):
+            stages.add(identifier)
+            if status == "Current":
+                current_stages.append(identifier)
 
     if not tasks:
         errors.append("roadmap: no task rows found")
     missing = sorted(REQUIRED_TASK_IDS.difference(tasks))
     if missing:
         errors.append(f"roadmap: missing required task IDs: {', '.join(missing)}")
+    missing_stages = sorted(REQUIRED_STAGE_IDS.difference(stages))
+    if missing_stages:
+        errors.append(
+            "roadmap: missing required stage IDs: " + ", ".join(missing_stages)
+        )
     return tasks, current_stages
 
 

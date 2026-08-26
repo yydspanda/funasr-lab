@@ -68,6 +68,48 @@ class AsrProgressGovernanceTest(unittest.TestCase):
     def test_repository_documents_are_valid(self) -> None:
         self.assertEqual([], self._errors())
 
+    def test_service_stage_is_required(self) -> None:
+        roadmap = self._read(governance.ROADMAP_PATH)
+        roadmap = re.sub(
+            r"^\| `SERVE` \| Pending \|.*\n",
+            "",
+            roadmap,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        self._write(governance.ROADMAP_PATH, roadmap)
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any(
+                "missing required stage IDs" in error and "SERVE" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_service_task_is_required(self) -> None:
+        roadmap = self._read(governance.ROADMAP_PATH)
+        roadmap = re.sub(
+            r"^\| `SERVE-01` \| Pending \|.*\n",
+            "",
+            roadmap,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        self._write(governance.ROADMAP_PATH, roadmap)
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any(
+                "missing required task IDs" in error and "SERVE-01" in error
+                for error in errors
+            ),
+            errors,
+        )
+
     def test_project_calendar_uses_asia_shanghai_at_utc_month_boundary(self) -> None:
         utc_instant = dt.datetime(
             2026, 8, 31, 16, 30, tzinfo=dt.timezone.utc
