@@ -6,7 +6,7 @@
 
 ## Control Record
 
-- **Current Stage:** `BASE`
+- **Current Stage:** `EVAL`
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`
 - **Baseline Commit:** `eedd4e22d10dc2e81d9c2bb321edb3750253964b`
@@ -18,8 +18,8 @@
 | Stage | Status | Outcome | Exit gate |
 |---|---|---|---|
 | `BOOT` | Done | Reproducible fork, CPU-first environment, governance, and smoke command | Repository doctor and all lightweight governance checks pass from a clean environment |
-| `BASE` | **Current** | Frozen upstream offline and speed-control results | Paraformer and SenseVoice produce versioned accuracy/performance reports on the same smoke set |
-| `EVAL` | Pending | Evaluation protocol and seed corpus frozen | Normalization, CER/MER accounting, manifests, splits, and hashes pass independent replay |
+| `BASE` | Done | Frozen upstream offline and speed-control results | Paraformer and SenseVoice produce versioned accuracy/performance reports on the same smoke set |
+| `EVAL` | **Current** | Evaluation protocol and seed corpus frozen | Normalization, CER/MER accounting, manifests, splits, and hashes pass independent replay |
 | `TRAIN` | Pending | Minimal training loop proven | A tiny subset intentionally overfits; save, reload, and inference reproduce the expected result |
 | `EXP` | Pending | First attributable quality experiment | One hypothesis beats the frozen baseline and survives blind verification without a declared regression |
 | `STREAM` | Pending | Native-streaming baseline and regression gate | Partial/final accuracy, latency, churn, and state reset are reproducible on long streams |
@@ -39,8 +39,8 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
 | ID | Status | Deliverable | Acceptance |
 |---|---|---|---|
 | `BOOT-01` | Done | Fork topology, pinned Python environment, doctor/smoke entry point, agent workflows, governance documents and CI | `origin`/fetch-only `upstream` are correct; baseline resolves to the recorded commit; doctor, governance, manifest, unit, and static checks pass without downloading a model |
-| `BASE-01` | **In Progress** | Reproducible Paraformer offline and SenseVoiceSmall control runs | Same frozen audio/normalizer; exact model revisions and commands recorded; CER components, RTF P50/P95, peak RSS, cold/warm timing reported |
-| `EVAL-01` | Pending | Frozen evaluator, seed manifest, normalizers, report schema, and dataset register | Hand-calculated fixtures match CER/MER; split and audio/text hashes are stable; repeated evaluation produces byte-stable core metrics |
+| `BASE-01` | Done | Reproducible Paraformer offline and SenseVoiceSmall control runs | Same frozen audio/normalizer; exact model revisions and commands recorded; CER components, RTF P50/P95, peak RSS, cold/warm timing reported |
+| `EVAL-01` | **In Progress** | Frozen evaluator, seed manifest, normalizers, report schema, and dataset register | Hand-calculated fixtures match CER/MER; split and audio/text hashes are stable; repeated evaluation produces byte-stable core metrics |
 | `TRAIN-01` | Pending | CPU-feasible tiny-training and checkpoint round trip | Forward/backward/update work; loss descends on a tiny subset; saved checkpoint reloads; resulting inference and config lineage are verified |
 | `EXP-01` | Pending | First one-variable contextual-bias experiment | Hypothesis and regression budget declared before results; all seeds reported; dev gain is confirmed on the blind set and error taxonomy explains the change |
 | `STREAM-01` | Pending | Paraformer-Streaming baseline, stream simulator, and long-stream tests | Chunk/look-back/VAD settings fixed; first partial, stable token, finalization, churn, RTF, reset, and boundary accuracy reported |

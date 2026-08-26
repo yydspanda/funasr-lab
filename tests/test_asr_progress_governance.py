@@ -237,13 +237,20 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
     def test_completion_record_status_must_match_roadmap(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
-        record = """\
+        task_match = re.search(
+            r"^- \*\*In Progress Task:\*\* `([^`]+)`$",
+            progress,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(task_match)
+        task_id = task_match.group(1)
+        record = f"""\
 ### 2026-08-26 — Premature completion
 
-- **Task:** `BASE-01`
+- **Task:** `{task_id}`
 - **Status:** `Done`
 - **Outcome:** The task was claimed complete.
-- **Verification:** The Roadmap still says Pending.
+- **Verification:** The Roadmap still says In Progress.
 
 """
         progress = progress.replace("## Update Contract", record + "## Update Contract", 1)
@@ -252,7 +259,10 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         errors = self._errors()
 
         self.assertTrue(
-            any("does not match Roadmap task BASE-01" in error for error in errors),
+            any(
+                f"does not match Roadmap task {task_id}" in error
+                for error in errors
+            ),
             errors,
         )
 
@@ -401,6 +411,14 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
 
     def test_archiver_moves_prior_month_record_and_preserves_active_pointer(self) -> None:
+        original_progress = self._read(governance.PROGRESS_PATH)
+        pointer_match = re.search(
+            r"^- \*\*Current Stage:\*\* `[^`]+`$",
+            original_progress,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(pointer_match)
+        expected_pointer = pointer_match.group(0)
         self._insert_record(self._record("2026-07-31", "Older completion"))
 
         plan = archiver.build_plan(self.root, today=FIXTURE_TODAY)
@@ -409,7 +427,7 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         self.assertEqual({"2026-07": 1}, plan.counts_by_month)
         self.assertIn(self.root / governance.PROGRESS_PATH, changed)
         progress = self._read(governance.PROGRESS_PATH)
-        self.assertIn("- **Current Stage:** `BASE`", progress)
+        self.assertIn(expected_pointer, progress)
         self.assertNotIn("Older completion", progress)
         archive = self._read(governance.ARCHIVE_PATH / "2026-07.md")
         self.assertIn("# ASR Progress Archive — 2026-07", archive)

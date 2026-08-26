@@ -6,10 +6,10 @@
 
 ## Current Pointer
 
-- **Current Stage:** `BASE`
-- **In Progress Task:** `BASE-01`
-- **Current Objective:** Provision and hash the pinned vanilla Paraformer and SenseVoiceSmall bundles, then use the installed locked CPU environment and frozen `LAB-BASE-SMOKE-001` corpus to produce comparable baseline reports.
-- **Next Gate:** Pre-register and run both offline tracks on the same frozen audio and normalizer, recording CER components, RTF P50/P95, cold/warm time, peak RSS, failures, exact commands, and artifact hashes in their experiment manifests.
+- **Current Stage:** `EVAL`
+- **In Progress Task:** `EVAL-01`
+- **Current Objective:** Register the real microphone/meeting `LAB-SEED-001` corpus with speaker/session-disjoint smoke, development, and sealed-blind splits; then freeze CER/MER fixtures, report schema, and replay behavior.
+- **Next Gate:** Freeze consent and access facts, audio/reference hashes, scenario coverage, and split isolation; prove hand-calculated CER/MER components and byte-stable core metrics without changing the pinned BASE models.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`
@@ -29,6 +29,13 @@
 | Remote enforcement | Both governance workflows run on push and weekly schedule; `develop` has no branch protection/ruleset, so direct writers can still bypass failed checks |
 
 ## Recent Completion Records
+
+### 2026-08-26 — Reproducible CPU offline baselines
+
+- **Task:** `BASE-01`
+- **Status:** `Done`
+- **Outcome:** Installed and verified the locked CPU environment; froze the two-item `LAB-BASE-SMOKE-001` wiring corpus; pinned and content-hashed vanilla Paraformer and SenseVoiceSmall; accepted both diagnostic runs with 2/2 successful utterances, content CER 0, and complete all-attempt latency, cold-start, RSS, command, and failure accounting. These smoke results are not product accuracy or capacity evidence.
+- **Verification:** Commit `607daf335cc1d2b0fa8164623e914e3b7741c9ec` was pushed to `develop`; `EXP-20260826-001-paraformer-base` binds report `sha256:2d508eebb98ec6771a4dcf06a176499e3577d2e7259c54f202c4eb265cbed8e2`, and `EXP-20260826-002-sensevoice-control` binds report `sha256:f911e6eaa8c10a070520c5e6e12b206c4ee3fd59a46ef301af11f691423828ff`; manifest-report parity and the full lightweight check suite passed.
 
 ### 2026-08-26 — Governance history, provenance, and fork guards
 
