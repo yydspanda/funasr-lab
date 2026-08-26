@@ -2,16 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yydspanda/funasr-lab/experiments/manifest.schema.json",
   "title": "funasr-lab experiment manifest",
+  "description": "A reproducible ASR experiment. Semantic checks beyond JSON Schema are enforced by scripts/check_experiment_manifests.py.",
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "schema_version",
     "experiment_id",
     "task_id",
     "hypothesis",
     "upstream_commit",
     "code_commit",
-    "model",
-    "model_revision",
+    "models",
     "config_sha256",
     "data_sha256",
     "eval_data_version",
@@ -24,35 +25,175 @@
     "decision"
   ],
   "properties": {
-    "experiment_id": {"type": "string", "pattern": "^EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?$"},
-    "task_id": {"type": "string", "pattern": "^[A-Z]+-[0-9]{2}$"},
-    "hypothesis": {"type": "string", "minLength": 1},
-    "upstream_commit": {"type": "string", "minLength": 7},
-    "code_commit": {"type": "string", "minLength": 7},
-    "model": {"type": "string", "minLength": 1},
-    "model_revision": {"type": "string", "minLength": 1},
-    "config_sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$"},
-    "data_sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$"},
+    "schema_version": {"const": 1},
+    "experiment_id": {
+      "type": "string",
+      "pattern": "^EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?$"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*-([0-9]{2}|SYNC)$"
+    },
+    "hypothesis": {"type": "string", "minLength": 12},
+    "upstream_commit": {
+      "description": "The exact upstream FunASR commit, resolved to a lowercase 40-character Git object ID.",
+      "$ref": "#/$defs/gitCommit"
+    },
+    "code_commit": {
+      "description": "The exact downstream experiment code commit, resolved to a lowercase 40-character Git object ID.",
+      "$ref": "#/$defs/gitCommit"
+    },
+    "models": {
+      "description": "Every model component loaded by the command, including ASR, VAD, punctuation, LM, or ITN components.",
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/modelComponent"}
+    },
+    "config_sha256": {
+      "description": "SHA-256 of the exact effective experiment configuration.",
+      "$ref": "#/$defs/sha256"
+    },
+    "data_sha256": {
+      "description": "SHA-256 of the frozen, ordered evaluation dataset manifest.",
+      "$ref": "#/$defs/sha256"
+    },
     "eval_data_version": {"type": "string", "minLength": 1},
     "normalizer_version": {"type": "string", "minLength": 1},
-    "hardware": {"type": "string", "minLength": 1},
-    "seed": {"type": "integer"},
-    "command": {"type": "string", "minLength": 1},
+    "hardware": {"$ref": "#/$defs/hardware"},
+    "seed": {"type": "integer", "minimum": 0},
+    "command": {"$ref": "#/$defs/command"},
     "metrics": {
-      "type": "object",
-      "required": ["content_cer", "rtf_p50", "peak_rss_mb"],
+      "type": ["object", "null"],
+      "additionalProperties": {"type": "number"},
+      "required": [
+        "content_cer",
+        "substitutions",
+        "deletions",
+        "insertions",
+        "reference_units",
+        "utterance_count",
+        "failed_count",
+        "rtf_p50",
+        "rtf_p95",
+        "peak_rss_mb"
+      ],
       "properties": {
         "content_cer": {"type": "number", "minimum": 0},
+        "substitutions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "reference_units": {"type": "integer", "minimum": 1},
+        "utterance_count": {"type": "integer", "minimum": 1},
+        "failed_count": {"type": "integer", "minimum": 0},
         "mer": {"type": ["number", "null"], "minimum": 0},
-        "rtf_p50": {"type": "number", "minimum": 0},
-        "rtf_p95": {"type": ["number", "null"], "minimum": 0},
+        "rtf_p50": {"type": "number", "exclusiveMinimum": 0},
+        "rtf_p95": {"type": "number", "exclusiveMinimum": 0},
         "first_partial_ms": {"type": ["number", "null"], "minimum": 0},
         "finalization_ms": {"type": ["number", "null"], "minimum": 0},
         "partial_churn": {"type": ["number", "null"], "minimum": 0},
-        "peak_rss_mb": {"type": "number", "minimum": 0}
+        "peak_rss_mb": {"type": "number", "exclusiveMinimum": 0}
       }
     },
-    "artifacts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
     "decision": {"enum": ["planned", "accept", "reject", "investigate"]}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {"enum": ["accept", "reject", "investigate"]}
+        },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": {
+          "metrics": {"type": "object"},
+          "artifacts": {"minItems": 1}
+        }
+      },
+      "else": {
+        "properties": {
+          "metrics": {"type": "null"},
+          "artifacts": {"maxItems": 0}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "modelComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "identifier", "revision", "sha256"],
+      "properties": {
+        "role": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "identifier": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_id",
+        "os",
+        "cpu_model",
+        "logical_cpu_count",
+        "memory_bytes",
+        "device"
+      ],
+      "properties": {
+        "host_id": {"type": "string", "minLength": 1},
+        "os": {"type": "string", "minLength": 1},
+        "cpu_model": {"type": "string", "minLength": 1},
+        "logical_cpu_count": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1},
+        "device": {"type": "string", "minLength": 1},
+        "accelerator": {"type": ["string", "null"]}
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["working_directory", "argv", "environment"],
+      "properties": {
+        "working_directory": {"type": "string", "minLength": 1},
+        "argv": {
+          "description": "The complete, unabridged argument vector passed to the process.",
+          "type": "array",
+          "minItems": 2,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "environment": {
+          "description": "Non-secret environment variables that affect the result.",
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "additionalProperties": {"type": "string"}
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {
+          "enum": ["report", "prediction", "log", "checkpoint", "other"]
+        },
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
   }
 }

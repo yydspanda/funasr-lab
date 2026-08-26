@@ -14,6 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROADMAP_PATH = Path(".notes/asr/delivery-roadmap.md")
@@ -21,6 +22,9 @@ PROGRESS_PATH = Path(".notes/asr/progress.md")
 ARCHIVE_PATH = Path(".notes/archive/asr/progress")
 ROADMAP_MAX_LINES = 240
 PROGRESS_MAX_LINES = 120
+PROGRESS_MAX_RECORDS = 8
+ARCHIVE_MAX_LINES = 600
+PROJECT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 EXPECTED_UPSTREAM = "modelscope/FunASR"
 REQUIRED_TASK_IDS = {
     "BOOT-01",
@@ -41,11 +45,22 @@ ALLOWED_TASK_STATUSES = {
     "Blocked",
 }
 TERMINAL_STATUSES = {"Done", "Cancelled", "Superseded"}
-TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*-(?:\d{2}|SYNC)$")
+TASK_LIKE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+TASK_ID_TOKEN_RE = re.compile(
+    r"(?<![A-Z0-9-])"
+    r"([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{2}|[A-Z][A-Z0-9]*-SYNC)"
+    r"(?![A-Z0-9-])"
+)
 STAGE_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+BASELINE_REF_RE = re.compile(
+    r"^(?:v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-f]{40})$"
+)
+RECORD_HEADER_RE = re.compile(
+    r"^###\s+(\d{4}-\d{2}-\d{2})\s+[—-]\s+(.+?)\s*$", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,26 @@ class TaskRow:
     task_id: str
     status: str
     line_number: int
+
+
+@dataclass(frozen=True)
+class CompletionRecord:
+    date_text: str
+    title: str
+    task_id: str | None
+    status: str | None
+    start: int
+    end: int
+    text: str
+
+
+def project_today(now: dt.datetime | None = None) -> dt.date:
+    """Return the project calendar date independent of the runner timezone."""
+
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError("project_today requires an aware datetime")
+    return instant.astimezone(PROJECT_TIMEZONE).date()
 
 
 def _read_text(path: Path, errors: list[str]) -> str:
@@ -172,6 +207,11 @@ def _parse_roadmap_rows(
                     f"roadmap: task {identifier} has unsupported status {status!r}"
                 )
             tasks[identifier] = TaskRow(identifier, status, line_number)
+        elif TASK_LIKE_RE.fullmatch(identifier):
+            errors.append(
+                f"roadmap: malformed task ID {identifier!r} at line {line_number}; "
+                "use STAGE-NN or UP-SYNC"
+            )
         elif STAGE_ID_RE.fullmatch(identifier) and status == "Current":
             current_stages.append(identifier)
 
@@ -183,37 +223,162 @@ def _parse_roadmap_rows(
     return tasks, current_stages
 
 
-def _validate_completion_records(
+def parse_completion_records(
+    text: str, document: str, errors: list[str]
+) -> list[CompletionRecord]:
+    """Parse compact terminal records without depending on Markdown libraries."""
+
+    matches = list(RECORD_HEADER_RE.finditer(text))
+    records: list[CompletionRecord] = []
+    for match in matches:
+        next_heading = re.search(r"^##(?:#)?\s+", text[match.end() :], re.MULTILINE)
+        end = (
+            match.end() + next_heading.start()
+            if next_heading is not None
+            else len(text)
+        )
+        body = text[match.end() : end]
+        record_label = f"{document} record {match.group(1)}"
+        task_id = _single_backtick_field(body, "Task", record_label, errors)
+        status = _single_backtick_field(body, "Status", record_label, errors)
+        _single_text_field(body, "Outcome", record_label, errors)
+        _single_text_field(body, "Verification", record_label, errors)
+        records.append(
+            CompletionRecord(
+                date_text=match.group(1),
+                title=match.group(2),
+                task_id=task_id,
+                status=status,
+                start=match.start(),
+                end=end,
+                text=text[match.start() : end].strip(),
+            )
+        )
+    return records
+
+
+def _validate_progress_layout(
+    text: str, records: list[CompletionRecord], errors: list[str]
+) -> None:
+    headings = list(re.finditer(r"^##\s+(.+?)\s*$", text, re.MULTILINE))
+    expected = (
+        "Current Pointer",
+        "Current Constraints",
+        "Recent Completion Records",
+        "Update Contract",
+    )
+    names = [match.group(1) for match in headings]
+    if not names or names[0] != "Current Pointer":
+        errors.append("progress: Current Pointer must be the first level-two section")
+    positions: list[int] = []
+    for name in expected:
+        found = [match for match in headings if match.group(1) == name]
+        if len(found) != 1:
+            errors.append(
+                f"progress: expected exactly one '## {name}' section, found {len(found)}"
+            )
+        elif found:
+            positions.append(found[0].start())
+    if len(positions) == len(expected) and positions != sorted(positions):
+        errors.append("progress: required sections are out of order")
+
+    recent = [
+        match for match in headings if match.group(1) == "Recent Completion Records"
+    ]
+    if len(recent) == 1:
+        section_start = recent[0].end()
+        following = [match.start() for match in headings if match.start() > section_start]
+        section_end = min(following) if following else len(text)
+        if any(
+            record.start < section_start or record.end > section_end
+            for record in records
+        ):
+            errors.append(
+                "progress: every completion record must be inside "
+                "'## Recent Completion Records'"
+            )
+        _validate_record_container(
+            text,
+            records,
+            "progress",
+            errors,
+            start=section_start,
+            end=section_end,
+        )
+
+
+def _validate_record_container(
     text: str,
+    records: list[CompletionRecord],
+    document: str,
+    errors: list[str],
+    *,
+    start: int = 0,
+    end: int | None = None,
+) -> None:
+    end = len(text) if end is None else end
+    container = text[start:end]
+    heading_count = len(re.findall(r"^###\s+", container, re.MULTILINE))
+    contained_records = [
+        record for record in records if record.start >= start and record.end <= end
+    ]
+    if heading_count != len(contained_records):
+        errors.append(
+            f"{document}: every level-three heading must be a valid dated "
+            "completion record"
+        )
+    task_field_count = len(
+        re.findall(r"^- \*\*Task:\*\*", container, re.MULTILINE)
+    )
+    if task_field_count != len(contained_records):
+        errors.append(
+            f"{document}: every Task field must belong to exactly one completion record"
+        )
+
+
+def _validate_task_id_mentions(
+    text: str, document: str, tasks: dict[str, TaskRow], errors: list[str]
+) -> None:
+    # Free prose can legitimately contain tokens such as SHA-256 or UTF-8.
+    # Numbered work IDs use the repository's STAGE-NN convention; named IDs
+    # such as UP-SYNC are validated whenever they occupy a structured Task field.
+    mentioned = set(TASK_ID_TOKEN_RE.findall(text))
+    unknown = sorted(mentioned.difference(tasks))
+    if unknown:
+        errors.append(
+            f"{document}: task IDs are not registered in Roadmap: {', '.join(unknown)}"
+        )
+
+
+def _validate_completion_records(
+    records: list[CompletionRecord],
+    document: str,
     tasks: dict[str, TaskRow],
     last_updated: dt.date | None,
     errors: list[str],
+    *,
+    expected_month: str | None = None,
+    max_records: int | None = None,
 ) -> None:
-    header_re = re.compile(
-        r"^###\s+(\d{4}-\d{2}-\d{2})\s+[—-]\s+.+$", re.MULTILINE
-    )
-    matches = list(header_re.finditer(text))
-    if len(matches) > 10:
+    if max_records is not None and len(records) > max_records:
         errors.append(
-            f"progress: {len(matches)} recent completion records exceed the budget of 10"
+            f"{document}: {len(records)} completion records exceed the budget of "
+            f"{max_records}; run scripts/archive_asr_progress.py --apply"
         )
 
-    for index, match in enumerate(matches):
+    previous_date: dt.date | None = None
+    for record in records:
         record_date = _parse_date(
-            match.group(1), "completion record date", "progress", errors
+            record.date_text, "completion record date", document, errors
         )
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        body = text[match.end() : end]
-        task_id = _single_backtick_field(body, "Task", "completion record", errors)
-        status = _single_backtick_field(body, "Status", "completion record", errors)
-        _single_text_field(body, "Outcome", "completion record", errors)
-        _single_text_field(body, "Verification", "completion record", errors)
+        task_id = record.task_id
+        status = record.status
 
         if task_id is not None and task_id not in tasks:
-            errors.append(f"progress: completion record uses unknown task {task_id!r}")
+            errors.append(f"{document}: completion record uses unknown task {task_id!r}")
         if status is not None and status not in TERMINAL_STATUSES:
             errors.append(
-                f"progress: completion record status {status!r} is not terminal"
+                f"{document}: completion record status {status!r} is not terminal"
             )
         if (
             task_id is not None
@@ -223,15 +388,24 @@ def _validate_completion_records(
             and tasks[task_id].status != status
         ):
             errors.append(
-                "progress: completion record status does not match Roadmap task "
+                f"{document}: completion record status does not match Roadmap task "
                 f"{task_id}: {status!r} != {tasks[task_id].status!r}"
             )
-        if record_date is not None and last_updated is not None:
-            if record_date > last_updated:
+        if record_date is not None:
+            if last_updated is not None and record_date > last_updated:
                 errors.append(
-                    "progress: completion record date is later than Last Updated: "
+                    f"{document}: completion record date is later than Last Updated: "
                     f"{record_date.isoformat()} > {last_updated.isoformat()}"
                 )
+            if expected_month is not None and record.date_text[:7] != expected_month:
+                errors.append(
+                    f"{document}: record {record.date_text} belongs in archive "
+                    f"{record.date_text[:7]}.md; run "
+                    "scripts/archive_asr_progress.py --apply"
+                )
+            if previous_date is not None and record_date > previous_date:
+                errors.append(f"{document}: completion records must be newest first")
+            previous_date = record_date
 
 
 def _run_git(root: Path, *args: str) -> tuple[int, str]:
@@ -249,21 +423,24 @@ def _run_git(root: Path, *args: str) -> tuple[int, str]:
 
 def _validate_git_baseline(
     root: Path,
-    tag: str | None,
+    baseline_ref: str | None,
     commit: str | None,
     baseline_date: dt.date | None,
     errors: list[str],
 ) -> None:
-    if not (root / ".git").exists() or tag is None or commit is None:
+    if not (root / ".git").exists() or baseline_ref is None or commit is None:
         return
 
-    status, resolved = _run_git(root, "rev-parse", f"{tag}^{{commit}}")
+    status, resolved = _run_git(root, "rev-parse", f"{baseline_ref}^{{commit}}")
     if status != 0:
-        errors.append(f"git: baseline tag {tag!r} cannot be resolved: {resolved}")
+        errors.append(
+            f"git: baseline ref {baseline_ref!r} cannot be resolved: {resolved}"
+        )
         return
     if resolved != commit:
         errors.append(
-            f"git: baseline tag {tag} resolves to {resolved}, not recorded {commit}"
+            f"git: baseline ref {baseline_ref} resolves to {resolved}, "
+            f"not recorded {commit}"
         )
 
     status, commit_date_text = _run_git(root, "show", "-s", "--format=%cs", commit)
@@ -282,21 +459,83 @@ def _validate_git_baseline(
         )
 
 
-def _validate_archives(root: Path, errors: list[str]) -> None:
+def _validate_archives(
+    root: Path,
+    tasks: dict[str, TaskRow],
+    last_updated: dt.date | None,
+    errors: list[str],
+) -> list[tuple[str, CompletionRecord]]:
     archive_dir = root / ARCHIVE_PATH
     if not archive_dir.exists():
-        return
+        return []
+    archived_records: list[tuple[str, CompletionRecord]] = []
     for path in sorted(archive_dir.glob("*.md")):
         if path.name == "README.md":
             continue
-        if not re.fullmatch(r"\d{4}-\d{2}\.md", path.name):
+        filename_match = re.fullmatch(r"(\d{4}-\d{2})\.md", path.name)
+        if filename_match is None:
             errors.append(f"archive: unexpected progress filename {path.name!r}")
         text = _read_text(path, errors)
         if "**Current Stage:**" in text or "**In Progress Task:**" in text:
             errors.append(f"archive: {path} must not contain an active pointer")
+        line_count = _line_count(text)
+        if line_count > ARCHIVE_MAX_LINES:
+            errors.append(
+                f"archive: {path.name} has {line_count} lines, exceeding the "
+                f"monthly budget of {ARCHIVE_MAX_LINES}"
+            )
+
+        document = f"archive {path.name}"
+        _validate_task_id_mentions(text, document, tasks, errors)
+        records = parse_completion_records(text, document, errors)
+        _validate_record_container(text, records, document, errors)
+        if not records:
+            errors.append(f"{document}: must contain at least one completion record")
+        expected_month = filename_match.group(1) if filename_match is not None else None
+        if expected_month is not None:
+            expected_title = f"# ASR Progress Archive — {expected_month}"
+            if not text.startswith(expected_title + "\n"):
+                errors.append(
+                    f"{document}: first heading must be {expected_title!r}"
+                )
+        _validate_completion_records(
+            records,
+            document,
+            tasks,
+            last_updated,
+            errors,
+            expected_month=expected_month,
+        )
+        archived_records.extend((document, record) for record in records)
+    return archived_records
 
 
-def validate_repository(root: Path, *, verify_git: bool = True) -> list[str]:
+def _validate_unique_records(
+    active_records: list[CompletionRecord],
+    archived_records: list[tuple[str, CompletionRecord]],
+    errors: list[str],
+) -> None:
+    seen: dict[tuple[str, str | None, str], str] = {}
+    located = [("progress", record) for record in active_records]
+    located.extend(archived_records)
+    for document, record in located:
+        identity = (record.date_text, record.task_id, record.title)
+        if identity in seen:
+            errors.append(
+                f"history: duplicate completion record {record.date_text} "
+                f"{record.task_id or '<missing task>'} {record.title!r} in "
+                f"{seen[identity]} and {document}"
+            )
+        else:
+            seen[identity] = document
+
+
+def validate_repository(
+    root: Path,
+    *,
+    verify_git: bool = True,
+    today: dt.date | None = None,
+) -> list[str]:
     """Return all governance violations found below *root*."""
 
     root = root.resolve()
@@ -374,7 +613,7 @@ def validate_repository(root: Path, *, verify_git: bool = True) -> list[str]:
 
     shared_labels = (
         "Upstream Repository",
-        "Baseline Tag",
+        "Baseline Ref",
         "Baseline Commit",
         "Baseline Date",
         "Last Updated",
@@ -399,14 +638,17 @@ def validate_repository(root: Path, *, verify_git: bool = True) -> list[str]:
             )
 
     upstream = roadmap_values["Upstream Repository"]
-    tag = roadmap_values["Baseline Tag"]
+    baseline_ref = roadmap_values["Baseline Ref"]
     commit = roadmap_values["Baseline Commit"]
     if upstream is not None and upstream != EXPECTED_UPSTREAM:
         errors.append(
             f"baseline: upstream must be {EXPECTED_UPSTREAM!r}, got {upstream!r}"
         )
-    if tag is not None and not TAG_RE.fullmatch(tag):
-        errors.append(f"baseline: invalid semantic version tag {tag!r}")
+    if baseline_ref is not None and not BASELINE_REF_RE.fullmatch(baseline_ref):
+        errors.append(
+            "baseline: Baseline Ref must be an immutable semantic release tag "
+            f"or full lowercase commit SHA, got {baseline_ref!r}"
+        )
     if commit is not None and not SHA_RE.fullmatch(commit):
         errors.append(f"baseline: commit must be a full lowercase 40-character SHA")
 
@@ -416,19 +658,33 @@ def validate_repository(root: Path, *, verify_git: bool = True) -> list[str]:
     last_updated = _parse_date(
         roadmap_values["Last Updated"], "Last Updated", "roadmap", errors
     )
-    today = dt.date.today()
+    current_date = today or project_today()
     if baseline_date is not None and last_updated is not None:
         if baseline_date > last_updated:
             errors.append("baseline: Baseline Date cannot be later than Last Updated")
-    if last_updated is not None and last_updated > today:
+    if last_updated is not None and last_updated > current_date:
         errors.append(
             f"roadmap: Last Updated {last_updated.isoformat()} is in the future"
         )
 
-    _validate_completion_records(progress_text, tasks, last_updated, errors)
-    _validate_archives(root, errors)
+    _validate_task_id_mentions(roadmap_text, "roadmap", tasks, errors)
+    _validate_task_id_mentions(progress_text, "progress", tasks, errors)
+    active_records = parse_completion_records(progress_text, "progress", errors)
+    _validate_progress_layout(progress_text, active_records, errors)
+    active_month = current_date.strftime("%Y-%m")
+    _validate_completion_records(
+        active_records,
+        "progress",
+        tasks,
+        last_updated,
+        errors,
+        expected_month=active_month,
+        max_records=PROGRESS_MAX_RECORDS,
+    )
+    archived_records = _validate_archives(root, tasks, last_updated, errors)
+    _validate_unique_records(active_records, archived_records, errors)
     if verify_git:
-        _validate_git_baseline(root, tag, commit, baseline_date, errors)
+        _validate_git_baseline(root, baseline_ref, commit, baseline_date, errors)
     return errors
 
 

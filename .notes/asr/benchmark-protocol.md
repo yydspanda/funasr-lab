@@ -104,3 +104,28 @@ A promotable run produces an experiment manifest and a generated report outside
 Git. Only the compact manifest, schema, evaluator, fixtures, and a human-readable
 decision summary are versioned. The manifest must bind report hashes so the
 summary cannot silently point at a different run.
+
+Each executed experiment manifest must pass
+`scripts/check_experiment_manifests.py` and bind:
+
+- full 40-character upstream and downstream Git commits;
+- every loaded model component's role, identifier, immutable revision, and
+  content hash;
+- SHA-256 hashes of the exact effective config and frozen ordered data manifest;
+- concrete OS, CPU, memory, device, and stable non-secret host identity;
+- the complete argument vector and every non-secret environment variable that
+  affects results;
+- finite measured metrics, including CER numerator components and denominator,
+  utterance/failure counts, RTF P50/P95, and peak RSS; once executed, at least
+  one content-hashed generated report.
+
+Pre-register the same manifest with `decision: planned`, `metrics: null`, and
+no artifacts; every identity, hash, hardware, and command field is already
+concrete. Execution replaces the null with measured metrics and adds hashed
+reports, so reviewers never need to accept fabricated zero results.
+
+Branch names, floating model revisions (`main`, `master`, `latest`, or `HEAD`),
+abbreviated commits, placeholder values, and zero/repeated/empty digests are not
+reproducible identities and fail governance checks. The canonical field formats
+and copyable starting point live in `experiments/manifest.schema.json` and
+`experiments/manifest.template.json`.

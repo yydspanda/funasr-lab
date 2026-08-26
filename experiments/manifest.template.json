@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "experiment_id": "EXP-YYYYMMDD-NNN-short-slug",
+  "task_id": "EXP-NN",
+  "hypothesis": "<one falsifiable hypothesis of at least 12 characters>",
+  "upstream_commit": "<40-character lowercase upstream Git commit>",
+  "code_commit": "<40-character lowercase downstream Git commit>",
+  "models": [
+    {
+      "role": "asr",
+      "identifier": "<hub namespace/model name or stable local identity>",
+      "revision": "<immutable tag or commit, never main/master/latest>",
+      "sha256": "sha256:<64-character digest of the resolved model bundle>"
+    }
+  ],
+  "config_sha256": "sha256:<64-character digest of the effective config>",
+  "data_sha256": "sha256:<64-character digest of the ordered dataset manifest>",
+  "eval_data_version": "<registered dataset and split version>",
+  "normalizer_version": "<versioned normalizer identity>",
+  "hardware": {
+    "host_id": "<stable non-secret host identity>",
+    "os": "<distribution, version, kernel, and architecture>",
+    "cpu_model": "<full CPU model>",
+    "logical_cpu_count": 0,
+    "memory_bytes": 0,
+    "device": "cpu",
+    "accelerator": null
+  },
+  "seed": 0,
+  "command": {
+    "working_directory": ".",
+    "argv": [
+      ".venv/bin/python",
+      "<script path and every expanded argument as separate array items>"
+    ],
+    "environment": {
+      "OMP_NUM_THREADS": "<effective value>"
+    }
+  },
+  "metrics": null,
+  "artifacts": [],
+  "decision": "planned"
+}

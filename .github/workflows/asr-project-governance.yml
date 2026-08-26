@@ -30,10 +30,16 @@ jobs:
           python-version: "3.11"
 
       - name: Validate Roadmap and Progress
-        run: python scripts/check_asr_progress.py
+        run: |
+          python scripts/check_asr_progress.py
+          python scripts/archive_asr_progress.py --check
 
       - name: Validate experiment manifests
-        run: python scripts/check_experiment_manifests.py
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/develop:refs/remotes/origin/develop
+          python scripts/check_experiment_manifests.py \
+            --code-ref refs/remotes/origin/develop
 
       - name: Run lightweight lab unit tests
         run: |
@@ -43,12 +49,14 @@ jobs:
       - name: Compile lightweight Python surfaces
         run: >-
           python -m compileall -q
+          asr_lab
           scripts
           eval
           tests/test_asr_lab_normalizer.py
           tests/test_asr_lab_smoke_entry.py
           tests/test_asr_progress_governance.py
           tests/test_experiment_manifest_governance.py
+          tests/test_upstream_guard_governance.py
 
       - name: Reject whitespace errors
         run: git diff-tree --check -r HEAD

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+from scripts import archive_asr_progress as archiver
 from scripts import check_asr_progress as governance
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_TODAY = dt.date(2026, 8, 26)
 
 
 class AsrProgressGovernanceTest(unittest.TestCase):
@@ -41,10 +44,36 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         (self.root / relative_path).write_text(text, encoding="utf-8")
 
     def _errors(self) -> list[str]:
-        return governance.validate_repository(self.root, verify_git=False)
+        return governance.validate_repository(
+            self.root, verify_git=False, today=FIXTURE_TODAY
+        )
+
+    @staticmethod
+    def _record(date: str, title: str, task_id: str = "BOOT-01") -> str:
+        return f"""\
+### {date} — {title}
+
+- **Task:** `{task_id}`
+- **Status:** `Done`
+- **Outcome:** A concise terminal outcome was recorded.
+- **Verification:** The focused governance check passed.
+
+"""
+
+    def _insert_record(self, record: str) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress = progress.replace("## Update Contract", record + "## Update Contract", 1)
+        self._write(governance.PROGRESS_PATH, progress)
 
     def test_repository_documents_are_valid(self) -> None:
         self.assertEqual([], self._errors())
+
+    def test_project_calendar_uses_asia_shanghai_at_utc_month_boundary(self) -> None:
+        utc_instant = dt.datetime(
+            2026, 8, 31, 16, 30, tzinfo=dt.timezone.utc
+        )
+
+        self.assertEqual(dt.date(2026, 9, 1), governance.project_today(utc_instant))
 
     def test_duplicate_progress_pointer_is_rejected(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
@@ -115,6 +144,17 @@ class AsrProgressGovernanceTest(unittest.TestCase):
             any("Baseline Commit differs" in error for error in errors), errors
         )
 
+    def test_full_commit_is_a_valid_immutable_baseline_ref(self) -> None:
+        baseline = "eedd4e22d10dc2e81d9c2bb321edb3750253964b"
+        for relative_path in (governance.ROADMAP_PATH, governance.PROGRESS_PATH):
+            text = self._read(relative_path).replace(
+                "- **Baseline Ref:** `v1.4.3`",
+                f"- **Baseline Ref:** `{baseline}`",
+            )
+            self._write(relative_path, text)
+
+        self.assertEqual([], self._errors())
+
     def test_roadmap_line_budget_is_enforced(self) -> None:
         roadmap = self._read(governance.ROADMAP_PATH)
         roadmap += "\n" + ("<!-- filler -->\n" * governance.ROADMAP_MAX_LINES)
@@ -173,6 +213,195 @@ class AsrProgressGovernanceTest(unittest.TestCase):
             any("does not match Roadmap task BASE-01" in error for error in errors),
             errors,
         )
+
+    def test_any_task_id_mentioned_in_progress_must_be_registered(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress = progress.replace(
+            "## Update Contract",
+            "An undocumented follow-up references `MISSING-42`.\n\n## Update Contract",
+            1,
+        )
+        self._write(governance.PROGRESS_PATH, progress)
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any(
+                "task IDs are not registered" in error and "MISSING-42" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_any_task_id_mentioned_in_roadmap_must_be_registered(self) -> None:
+        roadmap = self._read(governance.ROADMAP_PATH)
+        roadmap += "\nA dependency typo points to `BASE-02`.\n"
+        self._write(governance.ROADMAP_PATH, roadmap)
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any(
+                "roadmap: task IDs are not registered" in error
+                and "BASE-02" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_experiment_id_is_not_misclassified_as_a_roadmap_task(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress = progress.replace(
+            "## Update Contract",
+            "Evidence: `EXP-20260826-001-baseline`.\n\n## Update Contract",
+            1,
+        )
+        self._write(governance.PROGRESS_PATH, progress)
+
+        self.assertEqual([], self._errors())
+
+    def test_multisegment_task_like_tokens_cannot_hide(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress = progress.replace(
+            "## Update Contract",
+            "Hidden references: `GHOST-BASE-01` and `EXP-BASE-01`.\n\n"
+            "## Update Contract",
+            1,
+        )
+        self._write(governance.PROGRESS_PATH, progress)
+
+        errors = self._errors()
+
+        self.assertTrue(any("GHOST-BASE-01" in error for error in errors), errors)
+        self.assertTrue(any("EXP-BASE-01" in error for error in errors), errors)
+
+    def test_common_version_tokens_are_not_task_ids(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress = progress.replace(
+            "## Update Contract",
+            "Formats: `UTF-8`, `ISO-8601`, and `SHA-256`.\n\n## Update Contract",
+            1,
+        )
+        self._write(governance.PROGRESS_PATH, progress)
+
+        self.assertEqual([], self._errors())
+
+    def test_prior_month_record_requires_monthly_archive(self) -> None:
+        self._insert_record(self._record("2026-07-31", "Older completion"))
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any("belongs in archive 2026-07.md" in error for error in errors), errors
+        )
+
+    def test_calendar_rollover_does_not_trust_stale_last_updated(self) -> None:
+        september = dt.date(2026, 9, 1)
+        active_count = len(
+            governance.parse_completion_records(
+                self._read(governance.PROGRESS_PATH), "progress", []
+            )
+        )
+
+        errors = governance.validate_repository(
+            self.root, verify_git=False, today=september
+        )
+        plan = archiver.build_plan(self.root, today=september)
+
+        self.assertTrue(
+            any("belongs in archive 2026-08.md" in error for error in errors), errors
+        )
+        self.assertEqual({"2026-08": active_count}, plan.counts_by_month)
+
+    def test_archive_record_month_must_match_filename(self) -> None:
+        archive = self.root / governance.ARCHIVE_PATH / "2026-06.md"
+        archive.write_text(
+            "# ASR Progress Archive — 2026-06\n\n"
+            + self._record("2026-07-31", "Wrong archive month"),
+            encoding="utf-8",
+        )
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any(
+                "archive 2026-06.md" in error
+                and "belongs in archive 2026-07.md" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_duplicate_active_and_archived_record_is_rejected(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        records = governance.parse_completion_records(progress, "progress", [])
+        self.assertGreaterEqual(len(records), 1)
+        archive = self.root / governance.ARCHIVE_PATH / "2026-08.md"
+        archive.write_text(
+            "# ASR Progress Archive — 2026-08\n\n" + records[0].text + "\n",
+            encoding="utf-8",
+        )
+
+        errors = self._errors()
+
+        self.assertTrue(any("duplicate completion record" in error for error in errors), errors)
+
+    def test_completion_record_outside_recent_section_is_rejected(self) -> None:
+        progress = self._read(governance.PROGRESS_PATH)
+        progress += "\n" + self._record("2026-08-26", "Misplaced completion")
+        self._write(governance.PROGRESS_PATH, progress)
+
+        errors = self._errors()
+
+        self.assertTrue(
+            any("must be inside '## Recent Completion Records'" in error for error in errors),
+            errors,
+        )
+
+    def test_archiver_moves_prior_month_record_and_preserves_active_pointer(self) -> None:
+        self._insert_record(self._record("2026-07-31", "Older completion"))
+
+        plan = archiver.build_plan(self.root, today=FIXTURE_TODAY)
+        changed = archiver.apply_plan(self.root, plan)
+
+        self.assertEqual({"2026-07": 1}, plan.counts_by_month)
+        self.assertIn(self.root / governance.PROGRESS_PATH, changed)
+        progress = self._read(governance.PROGRESS_PATH)
+        self.assertIn("- **Current Stage:** `BASE`", progress)
+        self.assertNotIn("Older completion", progress)
+        archive = self._read(governance.ARCHIVE_PATH / "2026-07.md")
+        self.assertIn("# ASR Progress Archive — 2026-07", archive)
+        self.assertIn("Older completion", archive)
+        self.assertEqual([], self._errors())
+
+    def test_archiver_keeps_only_eight_same_month_records(self) -> None:
+        initial_count = len(
+            governance.parse_completion_records(
+                self._read(governance.PROGRESS_PATH), "progress", []
+            )
+        )
+        additions = "".join(
+            self._record("2026-08-25", f"Completion {index}")
+            for index in range(1, 9)
+        )
+        self._insert_record(additions)
+
+        plan = archiver.build_plan(self.root, today=FIXTURE_TODAY)
+        archiver.apply_plan(self.root, plan)
+
+        expected_overflow = initial_count + 8 - governance.PROGRESS_MAX_RECORDS
+        self.assertEqual(expected_overflow, len(plan.selected))
+        active_records = governance.parse_completion_records(
+            self._read(governance.PROGRESS_PATH), "progress", []
+        )
+        self.assertEqual(governance.PROGRESS_MAX_RECORDS, len(active_records))
+        archive_records = governance.parse_completion_records(
+            self._read(governance.ARCHIVE_PATH / "2026-08.md"),
+            "archive 2026-08.md",
+            [],
+        )
+        self.assertEqual(expected_overflow, len(archive_records))
+        self.assertEqual([], self._errors())
 
 
 if __name__ == "__main__":

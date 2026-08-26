@@ -16,7 +16,8 @@ Keep each experiment tied to one roadmap task and one tracked manifest.
 3. Read `.notes/asr/benchmark-protocol.md`; read
    `.notes/asr/dataset-register.md` and `.notes/asr/error-taxonomy.md` when data
    identity or error selection matters.
-4. Inspect the baseline config, code, command, prior manifest, and relevant tests.
+4. Read `experiments/manifests/README.md`, then inspect the baseline config,
+   code, command, prior manifest, and relevant tests.
 
 If an authoritative file needed to define the comparison is absent or unfinished,
 surface that as a prerequisite. Do not invent a local substitute or call the result
@@ -33,6 +34,25 @@ Before looking at treatment results, write an experiment manifest under
 - seed policy, command, device, precision, batch, beam, VAD, chunk, and look-back;
 - primary metric, guardrails, acceptance threshold, rejection condition, and run count.
 
+Use the versioned schema and template. Full 40-character upstream/downstream
+commits are mandatory. List every loaded ASR, VAD, punctuation, LM, or ITN
+component separately with an immutable revision and `sha256:` content hash;
+also bind the effective config and ordered data-manifest hashes. Hardware is a
+structured record, and the command is the complete argv plus every non-secret
+result-affecting environment variable. An executed result must contain finite
+metrics and at least one hashed report artifact. Branch names, abbreviated
+commits, floating model revisions, placeholders, and synthetic hashes are not
+acceptable provenance. The manifest task must already exist in the Roadmap.
+Land the frozen code/config first, update from the target branch, and create the
+manifest in a later commit: `code_commit` must resolve and already be an ancestor
+of the manifest commit, while `upstream_commit` must belong to the accepted
+upstream baseline history. Never bind provenance to a feature-branch commit that
+squash or rebase merge may rewrite. The manifest checker also requires
+`code_commit` to be reachable from the fetched durable target branch.
+For the pre-run `planned` state, use `metrics: null` and no artifacts; all other
+provenance must already validate. After execution, add measured metrics and at
+least one hashed report before choosing a terminal decision.
+
 Changing more than one causal variable creates separate experiments. Exploratory runs
 may discover candidates, but label them exploratory and do not use them for promotion.
 
@@ -40,7 +60,8 @@ may discover candidates, but label them exploratory and do not use them for prom
 
 Follow the frozen benchmark protocol and report enough components to explain movement:
 
-- content CER, including substitutions, deletions, and insertions;
+- content CER, including substitutions, deletions, insertions, reference units,
+  utterance count, and failed count;
 - MER for Chinese-English mixed speech;
 - punctuation, inverse-text-normalization, entity, and display metrics separately;
 - RTF P50/P95 for single-stream latency, without presenting batch throughput as latency;
@@ -61,6 +82,8 @@ test-set leakage is not an algorithm gain.
 4. Diagnose regressions with stable error categories, not anecdotes.
 5. Use dev results to select candidates and the blind test to decide promotion.
 6. Record failures and negative results; do not silently alter the hypothesis or gate.
+7. Run `python3 scripts/check_experiment_manifests.py` before presenting any
+   result; an invalid manifest makes the result `Inconclusive`.
 
 Return exactly one decision:
 

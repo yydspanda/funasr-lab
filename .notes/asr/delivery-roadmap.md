@@ -8,7 +8,7 @@
 
 - **Current Stage:** `BASE`
 - **Upstream Repository:** `modelscope/FunASR`
-- **Baseline Tag:** `v1.4.3`
+- **Baseline Ref:** `v1.4.3`
 - **Baseline Commit:** `eedd4e22d10dc2e81d9c2bb321edb3750253964b`
 - **Baseline Date:** `2026-08-21`
 - **Last Updated:** `2026-08-26`
@@ -43,7 +43,8 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01
 | `TRAIN-01` | Pending | CPU-feasible tiny-training and checkpoint round trip | Forward/backward/update work; loss descends on a tiny subset; saved checkpoint reloads; resulting inference and config lineage are verified |
 | `EXP-01` | Pending | First one-variable contextual-bias experiment | Hypothesis and regression budget declared before results; all seeds reported; dev gain is confirmed on the blind set and error taxonomy explains the change |
 | `STREAM-01` | Pending | Paraformer-Streaming baseline, stream simulator, and long-stream tests | Chunk/look-back/VAD settings fixed; first partial, stable token, finalization, churn, RTF, reset, and boundary accuracy reported |
-| `UP-SYNC` | Scheduled | Recurring upstream drift measurement and controlled integration | Record upstream SHA and ahead/behind counts; use `sync/upstream-*`; resolve conflicts without erasing downstream evidence or broadening core patches |
+| `MAINT-01` | Done | Bounded progress history, strict experiment provenance, upstream drift monitoring, and source-isolation guard | Active progress is month/record/line bounded; all task references resolve; executed experiments bind reproducible hashes, hardware, command, metrics, and reports; scheduled CI fails on excessive drift or unregistered upstream-core changes |
+| `UP-SYNC` | Scheduled | Recurring upstream drift measurement and controlled integration | Record full SHAs and ahead/behind for mirror main, active develop, and accepted baseline; use `sync/upstream-*`; resolve conflicts without erasing downstream evidence or broadening core patches |
 
 ## Gate Details
 
@@ -86,6 +87,17 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01
 - Chunking, look-back, caches, VAD, endpointing, and reset semantics are fixed.
 - Long streams include silence, boundary speech, noise, and reconnect cases.
 
+### MAINT Gate
+
+- Active progress contains only its current-month record window; monthly
+  archives preserve older verified history and cannot contain live pointers.
+- Weekly CI fetches trusted upstream and records full SHAs plus ahead/behind for
+  mirror `main`, active `develop`, and the accepted baseline. None may be more
+  than ten commits behind; mirror `main` must also be zero commits ahead.
+- The accepted baseline remains in trusted upstream history. Any downstream
+  addition or edit under upstream implementation surfaces has an exact patch
+  ledger entry, registered task, reason, and focused tests.
+
 ## Parking Lot
 
 These directions require explicit rescheduling and may not interrupt the
@@ -101,13 +113,19 @@ current task:
 
 1. Exactly one stage is `Current` and exactly one task is `In Progress`.
 2. Every implementation slice carries a registered task ID.
-3. `progress.md` points to the same stage/task and contains at most ten recent
-   terminal records.
+3. `progress.md` points to the same stage/task and contains only the current
+   Asia/Shanghai calendar month, newest first, with at most eight terminal records;
+   older records live in matching monthly archives.
 4. New ideas enter the Parking Lot or explicitly replace the current pointer;
    chat history is not project state.
 5. Code, focused tests, experiment manifest, and owning documentation move in
    the same delivery slice.
-6. Model, data, config, normalization, decoding, VAD, hardware, and seed changes
-   are declared before interpreting a comparison.
-7. Roadmap and progress edits must pass `python3 scripts/check_asr_progress.py`.
-8. Keep this active Roadmap within 240 lines and `progress.md` within 120 lines.
+6. Every executed experiment binds full upstream/downstream commits, every
+   loaded model revision/hash, config/data hashes, structured hardware, the
+   complete command, finite metrics, and hashed reports.
+7. Fork `main` stays zero commits ahead; mirror `main`, active `develop`, and
+   the accepted baseline stay no more than ten behind upstream. Upstream
+   implementation changes require an exact checked ledger entry.
+8. Roadmap/progress, manifest, archive, and fork-boundary edits must pass their
+   standard-library governance scripts and CI.
+9. Keep this active Roadmap within 240 lines and `progress.md` within 120 lines.

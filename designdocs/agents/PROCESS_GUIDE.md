@@ -17,6 +17,9 @@ Before editing code:
 2. Find the task ID and exit gate in `delivery-roadmap.md`.
 3. Read the owning protocol or register for the files being changed.
 4. State one delivery slice small enough to verify in the current branch.
+5. If the slice touches an upstream implementation surface, run the fork guard
+   and either move the change into the downstream overlay or register the exact
+   unavoidable path with its reason and focused tests.
 
 If the requested work does not belong to the current task, either record it in
 the Roadmap parking lot or explicitly replace the current pointer. Never run a
@@ -41,6 +44,8 @@ combined system.
 
 - Search for the existing extension point before modifying upstream core.
 - Keep generic upstream behavior and downstream lab additions separable.
+- Do not add or edit an upstream implementation path without updating
+  `.notes/asr/upstream-core-patches.json`; new files inside core are patches too.
 - Add focused tests with the code; do not defer verification to a later task.
 - Keep generated audio, checkpoints, transcripts, reports, and caches out of
   Git.
@@ -53,7 +58,9 @@ Run the smallest relevant check first, then the lightweight project gates:
 
 ```bash
 python3 scripts/check_asr_progress.py
+python3 scripts/archive_asr_progress.py --check
 python3 scripts/check_experiment_manifests.py
+python3 scripts/check_upstream_guard.py --no-fetch --run-ledger-tests
 python3 -m unittest discover -s tests -p 'test_*governance.py' -v
 python3 -m compileall -q scripts eval tests/test_asr_progress_governance.py
 ```
@@ -71,7 +78,8 @@ A slice closes only when its Roadmap gate has evidence. In the same change:
    its gate has passed;
 3. update the sole pointer and next gate in `progress.md`;
 4. add one concise completion record with verification evidence;
-5. move records beyond the ten-record budget into the monthly archive.
+5. run `scripts/archive_asr_progress.py --apply` to move prior-month records and
+   records beyond the eight-record window into their monthly archives.
 
 If the gate fails, keep the pointer where it is and record the concrete blocker
 in the current objective or experiment artifact. A promising dev-set number,

@@ -63,10 +63,25 @@ hardware, and metrics. Best-seed-only reporting is prohibited.
 
 ## Extension Boundary
 
-Prefer new registered models, predictors, evaluators, manifests, and narrow
-generic hooks. Modify existing `AutoModel`, Paraformer, or training internals
-only when an extension point cannot express the experiment; document that
-reason and protect the change with focused regression tests.
+The fork is a downstream overlay on a trusted upstream commit, not a rewrite.
+Keep algorithm adapters and registrations in the downstream-only `asr_lab/`
+namespace, and other lab-owned code in new evaluation, experiment, script,
+test, agent, and note surfaces. Prefer new registered models or predictors next,
+then narrow generic hooks. Modify existing `AutoModel`, Paraformer, runtime, or
+training internals only when an extension point cannot express the experiment.
+
+The machine-checked exception ledger at
+`.notes/asr/upstream-core-patches.json` binds every such path to a Roadmap task,
+the reason extension is insufficient, and focused tests. The accepted upstream
+baseline must be its ancestor and must itself belong to trusted upstream
+history. The current downstream diff contains no toolkit/runtime core patch.
+
+Fork maintenance is explicit: `main` mirrors upstream, `develop` carries the
+overlay, and weekly CI measures the mirror, active downstream branch, and
+accepted baseline against upstream. A controlled `UP-SYNC` updates the mirror,
+reconciles the overlay, and advances the accepted baseline together. CI fails
+if `main` contains a fork-only commit or if `main`, `develop`, or the accepted
+baseline becomes more than ten upstream commits behind.
 
 ## Initial Non-Goals
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIN_FREE_GIB = 30
+ROADMAP_PATH = REPO_ROOT / ".notes" / "asr" / "delivery-roadmap.md"
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,23 @@ def _command_output(*args: str) -> str:
         text=True,
     )
     return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _baseline_control() -> tuple[str, str]:
+    try:
+        text = ROADMAP_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return "", ""
+    ref_match = re.search(
+        r"^- \*\*Baseline Ref:\*\* `([^`]+)`$", text, re.MULTILINE
+    )
+    commit_match = re.search(
+        r"^- \*\*Baseline Commit:\*\* `([0-9a-f]{40})`$", text, re.MULTILINE
+    )
+    return (
+        ref_match.group(1) if ref_match else "",
+        commit_match.group(1) if commit_match else "",
+    )
 
 
 def collect_checks() -> list[Check]:
@@ -88,12 +107,22 @@ def collect_checks() -> list[Check]:
         )
     )
 
-    baseline = _command_output("git", "rev-parse", "v1.4.3^{commit}")
+    baseline_ref, baseline_commit = _baseline_control()
+    baseline = (
+        _command_output("git", "rev-parse", f"{baseline_ref}^{{commit}}")
+        if baseline_ref
+        else ""
+    )
+    baseline_ok = bool(baseline and baseline == baseline_commit)
     checks.append(
         Check(
             "baseline",
-            "pass" if baseline else "fail",
-            f"v1.4.3 -> {baseline[:12]}" if baseline else "tag missing",
+            "pass" if baseline_ok else "fail",
+            (
+                f"{baseline_ref} -> {baseline[:12]}"
+                if baseline_ok
+                else "Roadmap Baseline Ref/Commit is missing, unresolved, or mismatched"
+            ),
         )
     )
 

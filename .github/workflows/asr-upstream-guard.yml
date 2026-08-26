@@ -1,0 +1,59 @@
+name: ASR Upstream and Fork Boundary Guard
+
+on:
+  schedule:
+    - cron: "43 1 * * 1"
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asr-upstream-guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upstream-and-source-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete downstream history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure fetch-only upstream
+        shell: bash
+        run: |
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/modelscope/FunASR.git
+          else
+            git remote add upstream https://github.com/modelscope/FunASR.git
+          fi
+          git remote set-url --push upstream no_push
+
+      - name: Measure drift and enforce fork boundary
+        run: >-
+          python scripts/check_upstream_guard.py
+          --max-behind 10
+          --max-ahead 0
+          --run-ledger-tests
+          --json-output upstream-guard-summary.json
+
+      - name: Upload machine-readable guard result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-guard-${{ github.run_id }}
+          path: upstream-guard-summary.json
+          if-no-files-found: error
+
+      - name: Run focused guard tests
+        run: python -m unittest tests.test_upstream_guard_governance -v

@@ -16,7 +16,9 @@ than generic architecture preferences.
 3. Read `.notes/asr/benchmark-protocol.md` when behavior or performance may change.
 4. Read `.notes/asr/delivery-roadmap.md` and `.notes/asr/progress.md` only when delivery
    order or current status matters.
-5. Trace actual registries, configs, call sites, checkpoint loading, tests, and callers.
+5. Read `.notes/asr/upstream-core-patches.json` when an upstream implementation
+   surface may change, then trace actual registries, configs, call sites,
+   checkpoint loading, tests, and callers.
 
 Distinguish the current implementation from the proposed design. Cite paths and line
 numbers for material findings.
@@ -42,7 +44,7 @@ Evaluate only relevant gates and mark the rest not applicable:
 
 | Gate | Required questions |
 | --- | --- |
-| Upstream isolation | Can a registered downstream component or small generic extension avoid broad edits to `AutoModel` or Paraformer internals? If not, why? |
+| Upstream isolation | Can a downstream-owned module, registered leaf component, or small generic extension avoid touching upstream implementation paths? If not, is every exact path tied to a registered task, reason, and focused test in the checked ledger? |
 | Registration | Does construction use the existing registry/config mechanism without a parallel factory or special-case branch? |
 | Training/inference parity | Do features, tokenizer, shapes, masks, decoding semantics, precision, and exported state agree across paths? |
 | Compatibility | Are config defaults, checkpoint keys, versioning, migration, and old-model loading behavior explicit? |
@@ -70,9 +72,15 @@ For a material choice, compare at least one credible alternative and return one 
 
 Implement only when requested. Keep downstream code isolated, use existing registration
 and configuration paths, and add focused tests at each changed boundary. An unavoidable
-upstream-core edit must document why extension is insufficient and must include a
-sync-resistant focused test. Update only the authoritative documents whose owned facts
-changed; do not create parallel architecture or progress records.
+upstream-core addition or edit must document why extension is insufficient, include a
+sync-resistant focused test, and update `.notes/asr/upstream-core-patches.json`. Never
+advance its baseline to a downstream commit to hide a diff. Run
+`python3 scripts/check_upstream_guard.py --no-fetch --run-ledger-tests` locally;
+the ledger accepts only changed `tests/test_*.py` unittest modules, and CI executes
+every registered module while rejecting zero-test or all-skipped collection. Use
+the fetching form when
+the review needs current ahead/behind evidence. Update only the authoritative documents
+whose owned facts changed; do not create parallel architecture or progress records.
 
 ## Handoff
 

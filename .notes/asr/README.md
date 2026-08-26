@@ -11,6 +11,12 @@ downstream FunASR lab.
 | [benchmark-protocol.md](benchmark-protocol.md) | Frozen accuracy and performance comparison rules |
 | [dataset-register.md](dataset-register.md) | Dataset identity, split lineage, and hashes |
 | [error-taxonomy.md](error-taxonomy.md) | Stable error categories used to choose experiments |
+| [upstream-core-patches.json](upstream-core-patches.json) | Machine-checked exceptions to the upstream-source boundary |
+
+Older terminal records live under
+[`../archive/asr/progress/`](../archive/asr/progress/), grouped by completion
+month. Experiment provenance records and their schema live under
+[`../../experiments/`](../../experiments/).
 
 The workflow is defined in
 [PROCESS_GUIDE.md](../../designdocs/agents/PROCESS_GUIDE.md). Do not add a

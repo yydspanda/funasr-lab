@@ -43,10 +43,21 @@ not. Do not create a parallel roadmap or treat chat history as project state.
 - Use `exp/EXP-<date>-<slug>` for controlled experiments and
   `sync/upstream-<version>` for upstream integrations.
 
-Keep downstream changes isolated. Prefer new registered model components,
-evaluation modules, and small generic extension points over broad edits to
-`AutoModel` or existing Paraformer internals. Every unavoidable upstream-core
-edit must state why an extension is insufficient and include focused tests.
+Treat upstream source as read-only by default. Prefer `asr_lab/` and downstream-owned
+evaluation, experiment, agent, note, script, and test additions; then new
+registered leaf components; then a narrow generic extension point. Every
+unavoidable change under an upstream implementation surface must have one exact
+entry in [`.notes/asr/upstream-core-patches.json`](.notes/asr/upstream-core-patches.json)
+with a registered Roadmap task, an explanation of why extension is insufficient,
+and focused versioned tests. CI rejects unregistered core additions as well as
+edits. Never advance the ledger baseline to a downstream commit.
+
+`main` must not contain downstream commits. A weekly CI job fetches upstream
+and measures the mirror `origin/main`, active `origin/develop`, and accepted
+ledger baseline against `upstream/main`. It rejects any fork-main commit and
+fails when any tracked downstream state is more than ten commits behind.
+Updating `main`, reconciling `develop`, and advancing the accepted baseline
+fields plus patch ledger is a reviewed `UP-SYNC` slice, not an automatic merge.
 
 ## Repository Map
 
@@ -55,6 +66,7 @@ edit must state why an extension is insufficient and include focused tests.
 .notes/asr/                  Authoritative solution, roadmap, progress, data,
                              benchmark, and error-taxonomy documents
 .notes/reference-index/      Adopt/reject notes for external projects
+asr_lab/                     Downstream-only algorithms, adapters, and registry integrations
 designdocs/agents/           Static development-session process
 eval/                        Versioned evaluation code and public manifests;
                              generated reports and private audio stay untracked
@@ -68,7 +80,9 @@ scripts/                     Bootstrap, doctor, and governance checks
 - Exactly one roadmap task may be `In Progress`.
 - Each code slice carries a roadmap task ID such as `BASE-01` or `EXP-01`.
 - Each experiment starts with one primary hypothesis and one declared baseline.
-- Record code/model/data/config revisions before looking at the result.
+- Record full upstream/downstream commits; every loaded model's immutable
+  revision and content hash; config/data hashes; structured hardware; the full
+  argv/environment; measured metrics; and report hashes.
 - Do not report only the best seed or silently change normalization, VAD,
   decoding, chunk, or hardware settings.
 - Code, focused tests, experiment manifest, and authoritative documentation
@@ -102,10 +116,12 @@ Run from the repository root:
 ```bash
 python3 scripts/asr_lab_doctor.py
 python3 scripts/check_asr_progress.py
+python3 scripts/archive_asr_progress.py --check
 python3 scripts/check_experiment_manifests.py
+python3 scripts/check_upstream_guard.py --no-fetch --run-ledger-tests
 python3 scripts/run_baseline_smoke.py --track paraformer \
   --audio eval/private/smoke.wav --dry-run
-python3 -m compileall funasr examples tests eval scripts
+python3 -m compileall asr_lab funasr examples tests eval scripts
 ```
 
 Model tests under `tests_models/` may download checkpoints and are integration
@@ -121,11 +137,16 @@ recorded in its generated header; do not hand-edit resolved versions.
 
 - `solution.md`: product and architecture decisions.
 - `delivery-roadmap.md`: stage/task registry, order, and exit gates.
-- `progress.md`: one current pointer and recent verified completions.
+- `progress.md`: one current pointer and at most eight verified completions from
+  the current Asia/Shanghai calendar month.
+- `.notes/archive/asr/progress/YYYY-MM.md`: older terminal records, grouped by
+  their completion month.
+- `upstream-core-patches.json`: the complete exception ledger for downstream
+  changes to upstream implementation surfaces.
 - `benchmark-protocol.md`: frozen metric and comparison rules.
 - `dataset-register.md`: dataset identity, split, lineage, and hashes.
 - `error-taxonomy.md`: stable failure categories used to select experiments.
 - `experiments/manifests/*.json`: reproducible facts for an individual run.
 
-Update the owning document instead of copying its content elsewhere. Keep
-`progress.md` short; archive older completion records by month.
+Update the owning document instead of copying its content elsewhere. Run the
+archive helper before the active record window or month boundary is exceeded.
