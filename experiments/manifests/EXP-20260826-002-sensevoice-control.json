@@ -58,7 +58,35 @@
       "NUMEXPR_NUM_THREADS": "6"
     }
   },
-  "metrics": null,
-  "artifacts": [],
-  "decision": "planned"
+  "metrics": {
+    "content_cer": 0.0,
+    "substitutions": 0,
+    "deletions": 0,
+    "insertions": 0,
+    "reference_units": 30,
+    "utterance_count": 2,
+    "failed_count": 0,
+    "excluded_count": 0,
+    "retried_count": 0,
+    "rtf_attempted_count": 2,
+    "rtf_successful_count": 2,
+    "model_load_seconds": 12.135054676,
+    "cold_inference_seconds": 0.466182031,
+    "cold_start_seconds": 12.601236707,
+    "warm_wall_seconds": 0.92052874,
+    "warm_audio_seconds": 11.5466875,
+    "rtf_p50": 0.079903704,
+    "rtf_p95": 0.084061824,
+    "successful_rtf_p50": 0.079903704,
+    "successful_rtf_p95": 0.084061824,
+    "peak_rss_mb": 3198.5859375
+  },
+  "artifacts": [
+    {
+      "kind": "report",
+      "path": "eval/reports/EXP-20260826-002-sensevoice-control.json",
+      "sha256": "sha256:f911e6eaa8c10a070520c5e6e12b206c4ee3fd59a46ef301af11f691423828ff"
+    }
+  ],
+  "decision": "accept"
 }

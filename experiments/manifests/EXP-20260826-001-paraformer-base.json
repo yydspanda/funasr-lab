@@ -58,7 +58,35 @@
       "NUMEXPR_NUM_THREADS": "6"
     }
   },
-  "metrics": null,
-  "artifacts": [],
-  "decision": "planned"
+  "metrics": {
+    "content_cer": 0.0,
+    "substitutions": 0,
+    "deletions": 0,
+    "insertions": 0,
+    "reference_units": 30,
+    "utterance_count": 2,
+    "failed_count": 0,
+    "excluded_count": 0,
+    "retried_count": 0,
+    "rtf_attempted_count": 2,
+    "rtf_successful_count": 2,
+    "model_load_seconds": 25.98816825,
+    "cold_inference_seconds": 0.661185413,
+    "cold_start_seconds": 26.649353663,
+    "warm_wall_seconds": 1.575758459,
+    "warm_audio_seconds": 11.5466875,
+    "rtf_p50": 0.138766479,
+    "rtf_p95": 0.191448101,
+    "successful_rtf_p50": 0.138766479,
+    "successful_rtf_p95": 0.191448101,
+    "peak_rss_mb": 3108.02734375
+  },
+  "artifacts": [
+    {
+      "kind": "report",
+      "path": "eval/reports/EXP-20260826-001-paraformer-base.json",
+      "sha256": "sha256:2d508eebb98ec6771a4dcf06a176499e3577d2e7259c54f202c4eb265cbed8e2"
+    }
+  ],
+  "decision": "accept"
 }
