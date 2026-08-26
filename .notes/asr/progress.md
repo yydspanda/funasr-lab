@@ -8,8 +8,8 @@
 
 - **Current Stage:** `BASE`
 - **In Progress Task:** `BASE-01`
-- **Current Objective:** Install the locked CPU environment, freeze a small speaker/session-aware smoke corpus, pin every model revision, and produce comparable Paraformer and SenseVoiceSmall baseline reports.
-- **Next Gate:** Run both offline tracks on the same frozen audio and normalizer, recording CER components, RTF P50/P95, cold/warm time, peak RSS, failures, exact commands, and artifact hashes in the first experiment manifest.
+- **Current Objective:** Provision and hash the pinned vanilla Paraformer and SenseVoiceSmall bundles, then use the installed locked CPU environment and frozen `LAB-BASE-SMOKE-001` corpus to produce comparable baseline reports.
+- **Next Gate:** Pre-register and run both offline tracks on the same frozen audio and normalizer, recording CER components, RTF P50/P95, cold/warm time, peak RSS, failures, exact commands, and artifact hashes in their experiment manifests.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`
