@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "experiment_id": "EXP-20260826-002-sensevoice-control",
+  "task_id": "BASE-01",
+  "hypothesis": "Against the pinned Paraformer offline baseline on identical LAB-BASE-SMOKE-001 inputs and CPU settings, pinned SenseVoiceSmall will decode both utterances without failure and achieve lower all-attempt RTF P50 as the speed-control track.",
+  "upstream_commit": "eedd4e22d10dc2e81d9c2bb321edb3750253964b",
+  "code_commit": "1265ba94cb9fea92bab79d5b53483b6a4b88d331",
+  "models": [
+    {
+      "role": "asr",
+      "identifier": "iic/SenseVoiceSmall",
+      "revision": "7bf452403abd7353a300cd760f7adae7701c92c1",
+      "sha256": "sha256:88b79cf38fb75c5aff3136e218f711e39bed4479e880afe71c96892b59a1d0f6"
+    }
+  ],
+  "config_sha256": "sha256:92c72d13e57f0f8fed4bc23bb483b275ea8f6417fa6de7720e59f6950bc5de8e",
+  "data_sha256": "sha256:775614f52d04f1b9aa320007af31e18e87c60c53a88f25625390c7a8389bcc10",
+  "eval_data_version": "LAB-BASE-SMOKE-001-v0.1",
+  "normalizer_version": "zh-content-v0.1",
+  "hardware": {
+    "host_id": "cpu-lab-5800h-01",
+    "os": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 (WSL2)",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpu_count": 12,
+    "memory_bytes": 50515329024,
+    "device": "cpu",
+    "accelerator": null
+  },
+  "seed": 0,
+  "command": {
+    "working_directory": ".",
+    "argv": [
+      "/home/yydspei/projects/funasr-lab/.venv/bin/python",
+      "scripts/run_offline_baseline.py",
+      "--track",
+      "sensevoice",
+      "--dataset-manifest",
+      "eval/manifests/lab-base-smoke-001-v0.1.jsonl",
+      "--model-revision",
+      "7bf452403abd7353a300cd760f7adae7701c92c1",
+      "--output-report",
+      "eval/reports/EXP-20260826-002-sensevoice-control.json",
+      "--device",
+      "cpu",
+      "--ncpu",
+      "6",
+      "--warmup-runs",
+      "1",
+      "--seed",
+      "0"
+    ],
+    "environment": {
+      "MODELSCOPE_CACHE": "/home/yydspei/projects/funasr-lab/.cache/modelscope",
+      "PYTHONHASHSEED": "0",
+      "OMP_NUM_THREADS": "6",
+      "MKL_NUM_THREADS": "6",
+      "OPENBLAS_NUM_THREADS": "6",
+      "NUMEXPR_NUM_THREADS": "6"
+    }
+  },
+  "metrics": null,
+  "artifacts": [],
+  "decision": "planned"
+}

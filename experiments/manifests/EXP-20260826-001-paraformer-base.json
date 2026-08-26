@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "experiment_id": "EXP-20260826-001-paraformer-base",
+  "task_id": "BASE-01",
+  "hypothesis": "Pinned vanilla Paraformer is the declared offline baseline; on LAB-BASE-SMOKE-001 it will decode both utterances without failure and produce finite CPU CER, all-attempt RTF, and RSS metrics under the frozen BASE-01 harness.",
+  "upstream_commit": "eedd4e22d10dc2e81d9c2bb321edb3750253964b",
+  "code_commit": "1265ba94cb9fea92bab79d5b53483b6a4b88d331",
+  "models": [
+    {
+      "role": "asr",
+      "identifier": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+      "revision": "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692",
+      "sha256": "sha256:17619e7c76ddc91b9527ef33471a7c93599246e256764a67c7709d6e813db5bf"
+    }
+  ],
+  "config_sha256": "sha256:1c2f5701a3d818cc3c73e57acd1e388245d5c59692a0dc5f7c9d6286bc48d835",
+  "data_sha256": "sha256:775614f52d04f1b9aa320007af31e18e87c60c53a88f25625390c7a8389bcc10",
+  "eval_data_version": "LAB-BASE-SMOKE-001-v0.1",
+  "normalizer_version": "zh-content-v0.1",
+  "hardware": {
+    "host_id": "cpu-lab-5800h-01",
+    "os": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 (WSL2)",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpu_count": 12,
+    "memory_bytes": 50515329024,
+    "device": "cpu",
+    "accelerator": null
+  },
+  "seed": 0,
+  "command": {
+    "working_directory": ".",
+    "argv": [
+      "/home/yydspei/projects/funasr-lab/.venv/bin/python",
+      "scripts/run_offline_baseline.py",
+      "--track",
+      "paraformer",
+      "--dataset-manifest",
+      "eval/manifests/lab-base-smoke-001-v0.1.jsonl",
+      "--model-revision",
+      "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692",
+      "--output-report",
+      "eval/reports/EXP-20260826-001-paraformer-base.json",
+      "--device",
+      "cpu",
+      "--ncpu",
+      "6",
+      "--warmup-runs",
+      "1",
+      "--seed",
+      "0"
+    ],
+    "environment": {
+      "MODELSCOPE_CACHE": "/home/yydspei/projects/funasr-lab/.cache/modelscope",
+      "PYTHONHASHSEED": "0",
+      "OMP_NUM_THREADS": "6",
+      "MKL_NUM_THREADS": "6",
+      "OPENBLAS_NUM_THREADS": "6",
+      "NUMEXPR_NUM_THREADS": "6"
+    }
+  },
+  "metrics": null,
+  "artifacts": [],
+  "decision": "planned"
+}
