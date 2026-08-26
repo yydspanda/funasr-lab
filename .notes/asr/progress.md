@@ -26,6 +26,7 @@
 | Fork boundary | Upstream source is read-only by default; every unavoidable core path requires a checked ledger entry and focused tests |
 | Environment | Bootstrap and CI are CPU-first; model downloads and training runs are explicit, separately recorded actions |
 | Evidence | No quality or speed claim is promotable before full commits, every model/config/data hash, structured hardware, complete command, metrics, and report hashes are recorded |
+| Remote enforcement | Both governance workflows run on push and weekly schedule; `develop` has no branch protection/ruleset, so direct writers can still bypass failed checks |
 
 ## Recent Completion Records
 
@@ -34,7 +35,7 @@
 - **Task:** `MAINT-01`
 - **Status:** `Done`
 - **Outcome:** Bounded active progress to its current month and eight records with deterministic monthly archiving; strengthened experiment manifests; added weekly upstream ahead/behind checks and a machine-checked exception ledger for upstream implementation paths.
-- **Verification:** Progress/archive, experiment provenance, and upstream guard unit suites passed; a fresh fetch resolved mirror `main` and upstream to `8c60d278379de0044a9211a04660c9eeba08c66c` (`ahead=0`, `behind=0`), while active `develop` and the accepted baseline were each four commits behind; source isolation reported zero toolkit/runtime core patches.
+- **Verification:** Commit `fd98c9c316d3bcee0ae2e0964d2c8d99ee115682` was pushed to `develop`; `make PYTHON=.venv/bin/python check` passed doctor, governance, archive, manifest, compile, four lab tests, and 60 governance tests; both GitHub Actions workflows passed. A fresh guard fetch measured mirror `main` at `ahead=0/behind=0`, active `develop` at `ahead=2/behind=4`, and the accepted baseline at `ahead=0/behind=4`, with zero toolkit/runtime core patches.
 
 ### 2026-08-26 — Downstream fork and reproducible bootstrap
 
