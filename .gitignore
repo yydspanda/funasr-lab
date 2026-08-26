@@ -26,3 +26,13 @@ examples/aishell/llm_asr_nar/*
 *egg-info
 env/
 web-pages/product-site/tests/browser/node_modules/
+.venv/
+.cache/
+artifacts/
+model-cache/
+data/local/
+eval/private/
+eval/reports/*
+!eval/reports/.gitkeep
+eval/smoke/audio/*
+!eval/smoke/audio/.gitkeep

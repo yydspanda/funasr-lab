@@ -1,0 +1,6 @@
+interface:
+  display_name: "ASR Experimenter"
+  short_description: "Run reproducible ASR experiments and promotion gates"
+  default_prompt: "Use $asr-experimenter to freeze, run, and judge this ASR experiment against a reproducible baseline."
+policy:
+  allow_implicit_invocation: true

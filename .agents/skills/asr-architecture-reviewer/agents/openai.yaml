@@ -1,0 +1,6 @@
+interface:
+  display_name: "ASR Architecture Reviewer"
+  short_description: "Review durable ASR boundaries and streaming state"
+  default_prompt: "Use $asr-architecture-reviewer to review this ASR change for upstream isolation, registration, compatibility, and streaming-state risks."
+policy:
+  allow_implicit_invocation: true

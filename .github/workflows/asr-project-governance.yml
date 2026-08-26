@@ -1,0 +1,54 @@
+name: ASR Project Governance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asr-governance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lightweight-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out full baseline history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Roadmap and Progress
+        run: python scripts/check_asr_progress.py
+
+      - name: Validate experiment manifests
+        run: python scripts/check_experiment_manifests.py
+
+      - name: Run lightweight lab unit tests
+        run: |
+          python -m unittest discover -s tests -p 'test_asr_lab_*.py' -v
+          python -m unittest discover -s tests -p 'test_*_governance.py' -v
+
+      - name: Compile lightweight Python surfaces
+        run: >-
+          python -m compileall -q
+          scripts
+          eval
+          tests/test_asr_lab_normalizer.py
+          tests/test_asr_lab_smoke_entry.py
+          tests/test_asr_progress_governance.py
+          tests/test_experiment_manifest_governance.py
+
+      - name: Reject whitespace errors
+        run: git diff-tree --check -r HEAD

@@ -1,0 +1,1 @@
+{"id":"utt-example-001","audio":"eval/private/example.wav","duration_seconds":1.0,"sample_rate":16000,"channels":1,"raw_text":"示例文本","normalized_text":"示例文本","speaker_id":"speaker-example","session_id":"session-example","domain":"meeting","acoustic_tags":["clean"],"language_tags":["zh"],"difficulty_tags":[],"split":"smoke","data_version":"example-only"}

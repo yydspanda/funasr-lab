@@ -1,0 +1,7 @@
+# Reproducible BOOT/BASE environment for Linux x86_64 and Python 3.11.
+-e .
+torch==2.11.0
+torchaudio==2.11.0
+# FunASR v1.4.3 documents this 4.x line for its Qwen3 integration; keeping the
+# baseline below Transformers 5 also avoids an unreviewed major-version jump.
+transformers==4.57.6

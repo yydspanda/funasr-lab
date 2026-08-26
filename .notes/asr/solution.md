@@ -1,0 +1,78 @@
+# FunASR Lab Solution
+
+> Status: **Initial direction**
+> Updated: `2026-08-26`
+
+## Outcome
+
+Build a reproducible Chinese ASR research and product lab that can improve
+recognition quality without losing inference speed or native-streaming
+behavior. The first product-shaped target is microphone and meeting speech:
+Mandarin, accents, far field, noise, domain terms, and limited Chinese-English
+code switching.
+
+## Technical Decision
+
+Fork `modelscope/FunASR` and hold the first downstream baseline at:
+
+- tag: `v1.4.3`;
+- commit: `eedd4e22d10dc2e81d9c2bb321edb3750253964b`;
+- offline algorithm track: Paraformer;
+- native-streaming track: Paraformer-Streaming;
+- speed-oriented control: SenseVoiceSmall.
+
+Qwen3-ASR, FireRedASR2, and Whisper are comparison baselines, not the first
+implementation surface. WeNet remains an architecture reference if an
+experiment requires a different native-streaming formulation.
+
+## System Shape
+
+```text
+audio + immutable manifest
+        |
+        v
+decode / resample / VAD boundary
+        |
+        +--> offline Paraformer --------+
+        |                               |
+        +--> streaming Paraformer ------+--> normalized evaluation report
+        |                               |
+        +--> SenseVoice speed control --+
+                                        |
+                            error taxonomy + experiment manifest
+                                        |
+                                 promotion decision
+```
+
+Model output and display post-processing remain separate. The evaluator owns
+reference/hypothesis normalization and reports raw component counts so a text
+normalization change cannot masquerade as an acoustic-model improvement.
+
+## Research Loop
+
+The project advances through one-variable comparisons:
+
+```text
+reproduce -> freeze evaluation -> tiny overfit -> controlled experiment
+-> blind verification -> promote or reject -> streaming verification
+```
+
+Every promoted result must be reproducible from a versioned manifest that
+binds source, upstream baseline, model, config, data hashes, command, seeds,
+hardware, and metrics. Best-seed-only reporting is prohibited.
+
+## Extension Boundary
+
+Prefer new registered models, predictors, evaluators, manifests, and narrow
+generic hooks. Modify existing `AutoModel`, Paraformer, or training internals
+only when an extension point cannot express the experiment; document that
+reason and protect the change with focused regression tests.
+
+## Initial Non-Goals
+
+- training a large foundation ASR model from scratch;
+- optimizing punctuation, diarization, VAD, decoding, and the acoustic model in
+  one un-attributable experiment;
+- treating batch throughput as single-stream latency;
+- making promotion decisions from a development set alone;
+- committing models, datasets, generated transcripts, or benchmark reports.
