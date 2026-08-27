@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yydspanda/funasr-lab/eval/core-summary.schema.json",
+  "title": "Blind-safe ASR evaluation public summary",
+  "description": "Public aggregate projection bound to a restricted full core hash; it contains no item ids, references, hypotheses, or scoring units.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "access_class",
+    "core_sha256",
+    "scoring",
+    "configuration",
+    "counts",
+    "aggregate",
+    "slices"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "asr-evaluation-public-summary"},
+    "access_class": {"const": "public"},
+    "core_sha256": {"$ref": "#/$defs/sha256"},
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "normalizer_version",
+        "mer_tokenizer_version",
+        "alignment_version",
+        "hypothesis_adapter_version",
+        "rate_decimal_places"
+      ],
+      "properties": {
+        "normalizer_version": {"const": "zh-content-v0.1"},
+        "mer_tokenizer_version": {"const": "zh-en-mixed-v0.1"},
+        "alignment_version": {
+          "const": "levenshtein-diagonal-deletion-insertion-v1"
+        },
+        "hypothesis_adapter_version": {
+          "enum": ["identity-v1", "sensevoice-control-tags-v1"]
+        },
+        "rate_decimal_places": {"const": 12}
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slice_fields"],
+      "properties": {
+        "slice_fields": {
+          "const": ["scenario_tags", "split"]
+        }
+      }
+    },
+    "counts": {"$ref": "#/$defs/counts"},
+    "aggregate": {"$ref": "#/$defs/aggregate"},
+    "slices": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/slice"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "rate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 1}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "substitutions",
+        "deletions",
+        "insertions",
+        "errors",
+        "reference_units",
+        "rate",
+        "rate_decimal"
+      ],
+      "properties": {
+        "substitutions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "reference_units": {"type": "integer", "minimum": 0},
+        "rate": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/rate"}
+          ]
+        },
+        "rate_decimal": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,12})?$"
+            }
+          ]
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "utterance_count",
+        "scored_count",
+        "ok_count",
+        "failed_count",
+        "empty_count",
+        "excluded_count",
+        "zero_reference_count"
+      ],
+      "properties": {
+        "utterance_count": {"type": "integer", "minimum": 0},
+        "scored_count": {"type": "integer", "minimum": 0},
+        "ok_count": {"type": "integer", "minimum": 0},
+        "failed_count": {"type": "integer", "minimum": 0},
+        "empty_count": {"type": "integer", "minimum": 0},
+        "excluded_count": {"type": "integer", "minimum": 0},
+        "zero_reference_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cer", "mer"],
+      "properties": {
+        "cer": {"$ref": "#/$defs/metric"},
+        "mer": {"$ref": "#/$defs/metric"}
+      }
+    },
+    "slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dimension", "value", "counts", "aggregate"],
+      "properties": {
+        "dimension": {"type": "string", "minLength": 1},
+        "value": {"type": "string", "minLength": 1},
+        "counts": {"$ref": "#/$defs/counts"},
+        "aggregate": {"$ref": "#/$defs/aggregate"}
+      }
+    }
+  }
+}

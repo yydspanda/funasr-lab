@@ -14,7 +14,7 @@
     }
   ],
   "config_sha256": "sha256:<64-character digest of the effective config>",
-  "data_sha256": "sha256:<64-character digest of the ordered dataset manifest>",
+  "data_sha256": "sha256:<64-character digest of the collection descriptor or legacy ordered manifest>",
   "eval_data_version": "<registered dataset and split version>",
   "normalizer_version": "<versioned normalizer identity>",
   "hardware": {

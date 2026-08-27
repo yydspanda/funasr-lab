@@ -1,7 +1,7 @@
 # ASR Benchmark Protocol
 
 > Status: **Draft to freeze under `EVAL-01`**
-> Updated: `2026-08-26`
+> Updated: `2026-08-27`
 
 This protocol prevents data, normalization, decoding, and hardware changes from
 being mistaken for model improvements. Until `EVAL-01` passes, results are
@@ -14,23 +14,44 @@ Each utterance record must bind:
 - stable utterance, speaker, session, and split IDs;
 - audio relative path, SHA-256, duration, sample rate, and channel count;
 - verbatim reference plus the normalizer version;
-- scenario and error-taxonomy tags known before decoding.
+- versioned scenario tags known before decoding.
 
-Splits are speaker- and session-disjoint. Missing, failed, empty, and excluded
-items remain counted in the report with a reason.
+The collection descriptor binds the ordered manifest hash and record count for
+every split plus its provenance, rights, deduplication, and blind-access policy.
+Splits are disjoint by speaker, recording session, source recording, derived
+lineage, deduplication cluster, and exact audio identity. Missing, failed, and
+empty predictions remain in the primary denominator with a stable reason code;
+a missing or failed prediction is scored as empty content. A data-quality
+exclusion must be frozen in the collection before decoding, stays visible in
+counts and slices, and is the only case omitted from the scoring denominator;
+predictions cannot dynamically mark an item excluded.
+Observed error-taxonomy annotations are post-decode diagnostics and cannot
+change the frozen input slices or primary denominator.
 
 ## Text Views
 
 Keep three outputs instead of overwriting one:
 
 1. `raw`: exact reference or decoder text;
-2. `content`: frozen normalization for CER/MER;
+2. `content`: frozen normalization and unitized scoring views;
 3. `display`: punctuation, capitalization, ITN, and presentation processing.
 
-The content normalizer must version and test every operation. Initial candidate
-rules are Unicode normalization, approved whitespace removal, case folding for
-Latin tokens, and an explicit punctuation policy. Number/English expansion and
-ITN are separate metrics until fixtures prove semantic equivalence.
+Reference scoring always derives from the frozen raw reference. Hypothesis
+display/scoring text is derived only by a report-level, versioned decoder
+adapter; a prediction cannot supply its own cleaned display text.
+
+The content normalizer and each scoring unitizer version and test every
+operation. `zh-content-v0.1` applies NFKC, lowercases, and removes Unicode
+whitespace and punctuation; its resulting Unicode code points are CER units.
+It remains unchanged for BASE compatibility.
+
+`zh-en-mixed-v0.1` operates on the raw text because English boundaries cannot
+be recovered after the Chinese content normalizer. It applies NFKC and Unicode
+case folding, scores each Han ideograph separately, groups each contiguous run
+of Latin letters and digits as one unit, treats whitespace and Unicode
+punctuation as boundaries, and preserves every other code point as a singleton
+unit. Number expansion, English spelling expansion, apostrophe/hyphen joining,
+and ITN are not implicit scoring transformations.
 
 ## Accuracy Metrics
 
@@ -41,9 +62,16 @@ CER = (substitutions + deletions + insertions) / reference characters
 ```
 
 Always report the numerator components, denominator, utterance count, failed
-count, and macro slices in addition to aggregate CER. For Chinese-English mixed
-speech, report MER using Chinese characters and English words as scoring units.
-Also report domain-term/entity recall when `EXP-01` studies contextual bias.
+count, and frozen scenario/language slices in addition to aggregate CER. The
+primary corpus rate is micro-aggregated from integer components; a slice or
+per-utterance average must not replace it. For Chinese-English mixed speech,
+report MER using `zh-en-mixed-v0.1` units. Also report domain-term/entity recall
+when `EXP-01` studies contextual bias.
+
+An item with zero reference units has a null item rate rather than infinity or
+an invented zero. Its insertions still enter the corpus numerator. Equal-cost
+Levenshtein alignments prefer diagonal, then deletion, then insertion so the
+substitution/deletion/insertion breakdown is deterministic.
 
 Punctuation F1, ITN accuracy, and display-text accuracy remain secondary and
 must never replace content CER/MER.
@@ -105,13 +133,30 @@ Git. Only the compact manifest, schema, evaluator, fixtures, and a human-readabl
 decision summary are versioned. The manifest must bind report hashes so the
 summary cannot silently point at a different run.
 
+The EVAL core report contains only deterministic data/prediction identities,
+versioned scoring contracts, stable status/reason codes, integer components,
+exact rational denominators, items, and frozen slices. Generated time,
+performance measurements, absolute paths, argv, and raw exception text belong
+to a separate execution envelope. They cannot perturb the core bytes or hash.
+The full core is restricted because it contains references. A public summary
+binds its hash while removing item IDs, raw/reference/hypothesis text, and
+record/prediction projection hashes.
+
+The sealed-blind descriptor exposes only logical identities, hashes, counts,
+aggregate coverage, and the seal policy. It binds independent hashes of an
+audio/input projection and a restricted reference projection. Iterative runners
+receive only the former. An isolated scoring process joins the frozen
+hypothesis with the latter only after the candidate model, configuration,
+command, and hashes are frozen.
+
 Each executed experiment manifest must pass
 `scripts/check_experiment_manifests.py` and bind:
 
 - full 40-character upstream and downstream Git commits;
 - every loaded model component's role, identifier, immutable revision, and
   content hash;
-- SHA-256 hashes of the exact effective config and frozen ordered data manifest;
+- SHA-256 hashes of the exact effective config and frozen collection descriptor
+  (or legacy BASE ordered manifest);
 - concrete OS, CPU, memory, device, and stable non-secret host identity;
 - the complete argument vector and every non-secret environment variable that
   affects results;

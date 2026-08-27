@@ -1,10 +1,12 @@
 # ASR Error Taxonomy
 
 > Status: **Initial stable vocabulary; refine only through `EVAL-01` evidence**
-> Updated: `2026-08-26`
+> Updated: `2026-08-27`
 
 Use these labels to explain baseline failures and select one experiment. Labels
 describe observed errors, not assumed model causes; multiple labels may apply.
+They are assigned after decoding. Pre-decode evaluation slices use the separate,
+versioned scenario and language tags frozen in the dataset manifest.
 
 ## Primary Categories
 
@@ -35,6 +37,8 @@ describe observed errors, not assumed model causes; multiple labels may apply.
 - Use `unknown` rather than inventing an acoustic or decoder cause.
 - Taxonomy labels may measure slices; they may not remove hard examples from the
   aggregate metric.
+- Taxonomy labels never serve as pre-decode input metadata or blind-set
+  selection criteria.
 - A taxonomy definition change is versioned and the affected baseline is
   rescored before experiment comparison.
 

@@ -54,7 +54,7 @@
       "$ref": "#/$defs/sha256"
     },
     "data_sha256": {
-      "description": "SHA-256 of the frozen, ordered evaluation dataset manifest.",
+      "description": "SHA-256 of the frozen collection descriptor, or the ordered dataset manifest for legacy BASE runs.",
       "$ref": "#/$defs/sha256"
     },
     "eval_data_version": {"type": "string", "minLength": 1},

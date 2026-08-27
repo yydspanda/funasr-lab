@@ -20,6 +20,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 from eval.normalizers import NORMALIZER_VERSION
 from eval.normalizers import normalize_content
+from eval.scoring import EditCounts
+from eval.scoring import cer_components
 
 
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -101,24 +103,6 @@ class BaselineConfig:
     ncpu: int = 4
     warmup_runs: int = 1
     seed: int = 0
-
-
-@dataclass(frozen=True)
-class EditCounts:
-    substitutions: int = 0
-    deletions: int = 0
-    insertions: int = 0
-
-    @property
-    def total(self) -> int:
-        return self.substitutions + self.deletions + self.insertions
-
-    def __add__(self, other: "EditCounts") -> "EditCounts":
-        return EditCounts(
-            substitutions=self.substitutions + other.substitutions,
-            deletions=self.deletions + other.deletions,
-            insertions=self.insertions + other.insertions,
-        )
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -222,34 +206,6 @@ def reference_views(raw_text: str) -> dict[str, str]:
         "content": normalize_content(raw_text),
         "display": raw_text,
     }
-
-
-def cer_components(reference: str, hypothesis: str) -> EditCounts:
-    """Return deterministic character-level Levenshtein components.
-
-    Equal-cost paths prefer a diagonal operation, then deletion, then insertion.
-    This fixes component accounting even when more than one minimum alignment
-    exists.
-    """
-
-    previous = [EditCounts(insertions=index) for index in range(len(hypothesis) + 1)]
-    for ref_index, ref_character in enumerate(reference, start=1):
-        current = [EditCounts(deletions=ref_index)]
-        for hyp_index, hyp_character in enumerate(hypothesis, start=1):
-            diagonal = previous[hyp_index - 1]
-            if ref_character != hyp_character:
-                diagonal = diagonal + EditCounts(substitutions=1)
-            deletion = previous[hyp_index] + EditCounts(deletions=1)
-            insertion = current[hyp_index - 1] + EditCounts(insertions=1)
-            candidates = (diagonal, deletion, insertion)
-            current.append(
-                min(
-                    enumerate(candidates),
-                    key=lambda entry: (entry[1].total, entry[0]),
-                )[1]
-            )
-        previous = current
-    return previous[-1]
 
 
 def percentile(values: Sequence[float], quantile: float) -> float:

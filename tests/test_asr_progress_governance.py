@@ -12,7 +12,7 @@ from scripts import check_asr_progress as governance
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_TODAY = dt.date(2026, 8, 26)
+FIXTURE_TODAY = dt.date(2026, 8, 27)
 
 
 class AsrProgressGovernanceTest(unittest.TestCase):

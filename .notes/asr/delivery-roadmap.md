@@ -11,7 +11,7 @@
 - **Baseline Ref:** `v1.4.3`
 - **Baseline Commit:** `eedd4e22d10dc2e81d9c2bb321edb3750253964b`
 - **Baseline Date:** `2026-08-21`
-- **Last Updated:** `2026-08-26`
+- **Last Updated:** `2026-08-27`
 
 ## Stage Order
 
@@ -68,6 +68,11 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
 
 - Content CER is primary for Chinese; MER is added for mixed Chinese-English.
 - Raw, content-normalized, and display-text results remain distinct.
+- A canonical collection descriptor validates rights/provenance, ordered split
+  hashes, and speaker/session/source/lineage/dedup isolation in one replay.
+- Deterministic core-report bytes exclude execution-only performance and raw
+  exception details while preserving every missing, failed, empty, and frozen
+  excluded item.
 - The blind set is sealed and unavailable for iterative tuning.
 
 ### TRAIN Gate

@@ -39,8 +39,8 @@ to `accept`, `reject`, or `investigate`.
   encoded as `<file-sha256><two spaces><relative-path>\n`; use the same inventory
   algorithm for all compared runs.
 - `config_sha256` hashes the exact effective configuration after overrides are
-  resolved. `data_sha256` hashes the frozen, ordered evaluation manifest, not a
-  mutable directory name.
+  resolved. `data_sha256` hashes the frozen collection descriptor (or the
+  ordered manifest for legacy BASE runs), not a mutable directory name.
 - Use stable, non-secret `host_id` values. Record the real OS/kernel/architecture,
   CPU model, logical CPU count, installed memory in bytes, and actual device.
 - `command.argv` is the unabridged process argument vector. Expand wrapper

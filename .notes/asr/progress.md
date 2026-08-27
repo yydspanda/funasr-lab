@@ -8,14 +8,14 @@
 
 - **Current Stage:** `EVAL`
 - **In Progress Task:** `EVAL-01`
-- **Current Objective:** Register the real microphone/meeting `LAB-SEED-001` corpus with speaker/session-disjoint smoke, development, and sealed-blind splits; then freeze CER/MER fixtures, report schema, and replay behavior.
-- **Next Gate:** Freeze consent and access facts, audio/reference hashes, scenario coverage, and split isolation; prove hand-calculated CER/MER components and byte-stable core metrics without changing the pinned BASE models.
+- **Current Objective:** Replace the EVAL schema-only examples with the real microphone/meeting `LAB-SEED-001` descriptor and speaker/session/source/lineage-disjoint smoke, development, and sealed-blind manifests, then run the frozen evaluator through the custodian replay.
+- **Next Gate:** Review consent/access evidence and the dedup report; bind real audio/reference and ordered split hashes; seal blind references; pass cross-split isolation and byte-identical collection/core replay without changing the pinned BASE models.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`
 - **Baseline Commit:** `eedd4e22d10dc2e81d9c2bb321edb3750253964b`
 - **Baseline Date:** `2026-08-21`
-- **Last Updated:** `2026-08-26`
+- **Last Updated:** `2026-08-27`
 
 ## Current Constraints
 
