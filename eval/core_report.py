@@ -35,9 +35,9 @@ if TYPE_CHECKING:
     from eval.collection import ValidatedCollection
 
 
-CORE_SCHEMA_VERSION = 1
+CORE_SCHEMA_VERSION = 2
 CORE_KIND = "asr-evaluation-core"
-PUBLIC_SUMMARY_KIND = "asr-evaluation-public-summary"
+CORE_SUMMARY_KIND = "asr-evaluation-core-summary"
 RATE_DECIMAL_PLACES = 12
 
 IDENTITY_HYPOTHESIS_ADAPTER_VERSION = "identity-v1"
@@ -120,6 +120,39 @@ def _require_nonnegative_integer(value: Any, context: str) -> int:
     return value
 
 
+def _validate_evaluation_scope(
+    value: Any, context: str = "evaluation_scope"
+) -> Mapping[str, Any]:
+    """Validate the versioned collection-owned evaluation scope."""
+
+    scope = _require_mapping(value, context)
+    kind = scope.get("kind")
+    if kind == "collection":
+        if set(scope) != {"kind"}:
+            raise CoreReportValidationError(
+                f"{context} collection scope must contain exactly kind"
+            )
+        return scope
+    if kind == "split":
+        if set(scope) != {"kind", "split"}:
+            raise CoreReportValidationError(
+                f"{context} split scope must contain exactly kind and split"
+            )
+        split = _require_string(scope["split"], f"{context}.split")
+        # Delayed import preserves the lightweight scoring/identity dependency
+        # direction while making the split vocabulary collection-owned.
+        from eval.collection import ALLOWED_SPLITS
+
+        if split not in ALLOWED_SPLITS:
+            raise CoreReportValidationError(
+                f"{context}.split must be one of {list(ALLOWED_SPLITS)!r}"
+            )
+        return scope
+    raise CoreReportValidationError(
+        f"{context}.kind must be collection or split"
+    )
+
+
 def _decimal_ratio(numerator: int, denominator: int) -> str:
     """Render one deterministic half-up decimal without floating point."""
 
@@ -182,7 +215,9 @@ def _text_views(raw_text: str, display_text: str) -> dict[str, Any]:
     }
 
 
-def _adapt_hypothesis(raw_text: str, adapter_version: str) -> str:
+def adapt_hypothesis(raw_text: str, adapter_version: str) -> str:
+    """Derive the only scoring/display hypothesis allowed by an adapter."""
+
     if adapter_version == IDENTITY_HYPOTHESIS_ADAPTER_VERSION:
         return raw_text
     if adapter_version == SENSEVOICE_HYPOTHESIS_ADAPTER_VERSION:
@@ -285,6 +320,7 @@ def _build_core_report(
     *,
     data_sha256: str,
     expected_record_input_sha256: str,
+    evaluation_scope: Mapping[str, Any],
     hypothesis_adapter_version: str = IDENTITY_HYPOTHESIS_ADAPTER_VERSION,
 ) -> dict[str, Any]:
     """Build a deterministic core report from already joined collection inputs.
@@ -312,6 +348,7 @@ def _build_core_report(
     expected_record_digest = _require_sha256(
         expected_record_input_sha256, "expected_record_input_sha256"
     )
+    scope = _validate_evaluation_scope(evaluation_scope)
     adapter_version = _require_string(
         hypothesis_adapter_version, "hypothesis_adapter_version"
     )
@@ -444,7 +481,7 @@ def _build_core_report(
                 f"{prediction_context}.raw_text",
                 allow_empty=True,
             )
-            hypothesis_display = _adapt_hypothesis(
+            hypothesis_display = adapt_hypothesis(
                 hypothesis_raw, adapter_version
             )
             raw_status = prediction.get("status")
@@ -529,7 +566,10 @@ def _build_core_report(
             "hypothesis_adapter_version": adapter_version,
             "rate_decimal_places": RATE_DECIMAL_PLACES,
         },
-        "configuration": {"slice_fields": list(normalized_slice_fields)},
+        "configuration": {
+            "slice_fields": list(normalized_slice_fields),
+            "evaluation_scope": dict(scope),
+        },
         "counts": _item_count_document(items),
         "aggregate": _aggregate_document(items),
         "slices": _slice_reports(items),
@@ -576,13 +616,46 @@ def _validated_collection_inputs(
     return records, data_digest, expected_record_digest
 
 
+def _scoped_collection_inputs(
+    collection: Any,
+    evaluation_scope: Mapping[str, Any],
+) -> tuple[Sequence[Mapping[str, Any]], str, str]:
+    """Select ordered scoring records only through a validated collection."""
+
+    all_records, data_digest, collection_record_digest = (
+        _validated_collection_inputs(collection)
+    )
+    scope = _validate_evaluation_scope(evaluation_scope)
+    if scope["kind"] == "collection":
+        return all_records, data_digest, collection_record_digest
+
+    split = str(scope["split"])
+    selected_records = tuple(
+        record for record in all_records if record.get("split") == split
+    )
+    if not selected_records:
+        raise CoreReportValidationError(
+            f"validated collection contains no records for split {split!r}"
+        )
+    try:
+        selected_record_digest = record_input_sha256(
+            selected_records, slice_fields=DEFAULT_SLICE_FIELDS
+        )
+    except RecordIdentityError as exc:
+        raise CoreReportValidationError(str(exc)) from exc
+    return selected_records, data_digest, selected_record_digest
+
+
 def validate_core_report_for_collection(
     report: Mapping[str, Any], collection: ValidatedCollection
 ) -> None:
     """Validate a core report and bind it to one validated collection."""
 
-    records, data_digest, record_digest = _validated_collection_inputs(collection)
     validate_core_report(report)
+    evaluation_scope = report["configuration"]["evaluation_scope"]
+    records, data_digest, record_digest = _scoped_collection_inputs(
+        collection, evaluation_scope
+    )
     provenance = report["provenance"]
     if provenance["data_sha256"] != data_digest:
         raise CoreReportValidationError(
@@ -594,7 +667,8 @@ def validate_core_report_for_collection(
         )
     if provenance["record_input_sha256"] != record_digest:
         raise CoreReportValidationError(
-            "core provenance.record_input_sha256 does not match collection.summary"
+            "core provenance.record_input_sha256 does not match the selected "
+            "collection scope"
         )
 
     # validate_core_report binds the digest to the emitted items; this explicit
@@ -607,7 +681,7 @@ def validate_core_report_for_collection(
         raise CoreReportValidationError(str(exc)) from exc
     if provenance["record_input_sha256"] != collection_record_digest:
         raise CoreReportValidationError(
-            "core record inputs do not match the validated collection"
+            "core record inputs do not match the selected validated collection scope"
         )
 
 
@@ -625,11 +699,44 @@ def build_core_report(
     """
 
     records, data_digest, record_digest = _validated_collection_inputs(collection)
+    evaluation_scope = {"kind": "collection"}
     report = _build_core_report(
         records,
         predictions,
         data_sha256=data_digest,
         expected_record_input_sha256=record_digest,
+        evaluation_scope=evaluation_scope,
+        hypothesis_adapter_version=hypothesis_adapter_version,
+    )
+    validate_core_report_for_collection(report, collection)
+    return report
+
+
+def build_split_core_report(
+    collection: ValidatedCollection,
+    predictions: Sequence[Mapping[str, Any]],
+    *,
+    split: str,
+    hypothesis_adapter_version: str = IDENTITY_HYPOTHESIS_ADAPTER_VERSION,
+) -> dict[str, Any]:
+    """Build a core report for one collection-owned split in manifest order.
+
+    ``predictions`` must cover only records in the selected split; prediction
+    IDs from another split are rejected rather than silently discarded.
+    Dataset identity remains the full collection descriptor hash, while record
+    identity binds only the ordered records selected by ``split``.
+    """
+
+    evaluation_scope = {"kind": "split", "split": split}
+    records, data_digest, record_digest = _scoped_collection_inputs(
+        collection, evaluation_scope
+    )
+    report = _build_core_report(
+        records,
+        predictions,
+        data_sha256=data_digest,
+        expected_record_input_sha256=record_digest,
+        evaluation_scope=evaluation_scope,
         hypothesis_adapter_version=hypothesis_adapter_version,
     )
     validate_core_report_for_collection(report, collection)
@@ -812,15 +919,18 @@ def validate_core_report(report: Mapping[str, Any]) -> None:
         raise CoreReportValidationError("scoring rate decimal policy is unsupported")
 
     configuration = _require_mapping(document["configuration"], "configuration")
-    if set(configuration) != {"slice_fields"}:
+    if set(configuration) != {"slice_fields", "evaluation_scope"}:
         raise CoreReportValidationError(
-            "configuration must contain exactly slice_fields"
+            "configuration must contain exactly slice_fields and evaluation_scope"
         )
     slice_fields = configuration["slice_fields"]
     if slice_fields != list(_CORE_SLICE_FIELDS):
         raise CoreReportValidationError(
             "configuration.slice_fields must equal the frozen collection slice contract"
         )
+    evaluation_scope = _validate_evaluation_scope(
+        configuration["evaluation_scope"], "configuration.evaluation_scope"
+    )
 
     raw_items = document["items"]
     if not isinstance(raw_items, list) or not raw_items:
@@ -893,6 +1003,16 @@ def validate_core_report(report: Mapping[str, Any]) -> None:
             raise CoreReportValidationError(
                 f"{context}.slices must include every configured dimension"
             )
+        if evaluation_scope["kind"] == "split":
+            split_values = [
+                value
+                for dimension, value in expected_memberships
+                if dimension == "split"
+            ]
+            if split_values != [evaluation_scope["split"]]:
+                raise CoreReportValidationError(
+                    f"{context}.slices do not match the configured split scope"
+                )
 
         reference = _validate_views(item["reference"], f"{context}.reference")
         if reference["display"] != reference["raw"]:
@@ -908,7 +1028,7 @@ def validate_core_report(report: Mapping[str, Any]) -> None:
             hypothesis = _validate_views(
                 item["hypothesis"], f"{context}.hypothesis"
             )
-            if hypothesis["display"] != _adapt_hypothesis(
+            if hypothesis["display"] != adapt_hypothesis(
                 hypothesis["raw"], str(adapter_version)
             ):
                 raise CoreReportValidationError(
@@ -1003,11 +1123,11 @@ def core_report_sha256(report: Mapping[str, Any]) -> str:
     return _sha256_bytes(canonical_core_bytes(report))
 
 
-def _public_summary_projection(report: Mapping[str, Any]) -> dict[str, Any]:
+def _core_summary_projection(report: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": CORE_SCHEMA_VERSION,
-        "kind": PUBLIC_SUMMARY_KIND,
-        "access_class": "public",
+        "kind": CORE_SUMMARY_KIND,
+        "access_class": "restricted",
         "core_sha256": core_report_sha256(report),
         "scoring": deepcopy(report["scoring"]),
         "configuration": deepcopy(report["configuration"]),
@@ -1025,12 +1145,17 @@ def _public_summary_projection(report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_public_summary(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Project a restricted full core into blind-safe aggregate evidence."""
+def build_core_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a restricted core into a restricted text-free aggregate.
+
+    This document never authorizes release of sealed-set metrics. A future
+    release workflow must separately enforce the frozen one-candidate and
+    minimum-cell policies and create a distinct public artifact.
+    """
 
     validate_core_report(report)
-    summary = _public_summary_projection(report)
-    validate_public_summary(summary, source_core=report)
+    summary = _core_summary_projection(report)
+    validate_core_summary(summary, source_core=report)
     return summary
 
 
@@ -1095,12 +1220,16 @@ def _validate_summary_scoring(value: Any) -> Mapping[str, Any]:
     return scoring
 
 
-def validate_public_summary(
+def validate_core_summary(
     summary: Mapping[str, Any],
     *,
     source_core: Mapping[str, Any] | None = None,
 ) -> None:
-    """Validate a blind-safe summary and optionally bind it to its full core."""
+    """Validate a restricted summary and optionally bind it to its full core.
+
+    Validation proves shape and core parity, not sealed-result release
+    authorization.
+    """
 
     document = _require_mapping(summary, "summary")
     if set(document) != {
@@ -1115,33 +1244,39 @@ def validate_public_summary(
         "slices",
     }:
         raise CoreReportValidationError(
-            "public summary contains missing or unknown top-level fields"
+            "core summary contains missing or unknown top-level fields"
         )
     if (
         isinstance(document["schema_version"], bool)
         or not isinstance(document["schema_version"], int)
         or document["schema_version"] != CORE_SCHEMA_VERSION
     ):
-        raise CoreReportValidationError("unsupported public summary schema_version")
-    if document["kind"] != PUBLIC_SUMMARY_KIND:
-        raise CoreReportValidationError("unsupported public summary kind")
-    if document["access_class"] != "public":
-        raise CoreReportValidationError("public summary access_class must be public")
+        raise CoreReportValidationError("unsupported core summary schema_version")
+    if document["kind"] != CORE_SUMMARY_KIND:
+        raise CoreReportValidationError("unsupported core summary kind")
+    if document["access_class"] != "restricted":
+        raise CoreReportValidationError(
+            "core summary access_class must be restricted"
+        )
     _require_sha256(document["core_sha256"], "core_sha256")
 
     _validate_summary_scoring(document["scoring"])
 
     configuration = _require_mapping(document["configuration"], "configuration")
-    if set(configuration) != {"slice_fields"}:
+    if set(configuration) != {"slice_fields", "evaluation_scope"}:
         raise CoreReportValidationError(
-            "public summary configuration must contain exactly slice_fields"
+            "core summary configuration must contain exactly slice_fields and "
+            "evaluation_scope"
         )
     slice_fields = configuration["slice_fields"]
     if slice_fields != list(_CORE_SLICE_FIELDS):
         raise CoreReportValidationError(
-            "public summary slice_fields must equal the frozen collection "
+            "core summary slice_fields must equal the frozen collection "
             "slice contract"
         )
+    evaluation_scope = _validate_evaluation_scope(
+        configuration["evaluation_scope"], "configuration.evaluation_scope"
+    )
 
     _validate_summary_counts(document["counts"], "counts")
     aggregate = _require_mapping(document["aggregate"], "aggregate")
@@ -1182,46 +1317,56 @@ def validate_public_summary(
         _validate_metric(slice_aggregate["mer"], f"{context}.aggregate.mer")
     if slice_keys != sorted(set(slice_keys)):
         raise CoreReportValidationError(
-            "public summary slices must be unique and sorted"
+            "core summary slices must be unique and sorted"
         )
+    if evaluation_scope["kind"] == "split":
+        split_values = [
+            value for dimension, value in slice_keys if dimension == "split"
+        ]
+        if split_values != [evaluation_scope["split"]]:
+            raise CoreReportValidationError(
+                "core summary slices do not match the configured split scope"
+            )
 
     if source_core is not None:
         validate_core_report(source_core)
-        expected_summary = _public_summary_projection(source_core)
+        expected_summary = _core_summary_projection(source_core)
         if dict(document) != expected_summary:
             raise CoreReportValidationError(
-                "public summary does not match the restricted source core"
+                "core summary does not match the restricted source core"
             )
 
 
-def canonical_public_summary_bytes(summary: Mapping[str, Any]) -> bytes:
-    """Return canonical bytes for a validated blind-safe public summary."""
+def canonical_core_summary_bytes(summary: Mapping[str, Any]) -> bytes:
+    """Return canonical bytes for a validated restricted core summary."""
 
-    validate_public_summary(summary)
+    validate_core_summary(summary)
     return _canonical_json_bytes(summary)
 
 
-def public_summary_sha256(summary: Mapping[str, Any]) -> str:
-    """Return the canonical SHA-256 identity of a public summary."""
+def core_summary_sha256(summary: Mapping[str, Any]) -> str:
+    """Return the canonical SHA-256 identity of a restricted core summary."""
 
-    return _sha256_bytes(canonical_public_summary_bytes(summary))
+    return _sha256_bytes(canonical_core_summary_bytes(summary))
 
 
 __all__ = [
     "ALIGNMENT_VERSION",
     "CORE_KIND",
     "CORE_SCHEMA_VERSION",
+    "CORE_SUMMARY_KIND",
     "IDENTITY_HYPOTHESIS_ADAPTER_VERSION",
-    "PUBLIC_SUMMARY_KIND",
     "SENSEVOICE_HYPOTHESIS_ADAPTER_VERSION",
     "CoreReportValidationError",
+    "adapt_hypothesis",
     "build_core_report",
-    "build_public_summary",
+    "build_core_summary",
+    "build_split_core_report",
     "canonical_core_bytes",
-    "canonical_public_summary_bytes",
+    "canonical_core_summary_bytes",
+    "core_summary_sha256",
     "core_report_sha256",
-    "public_summary_sha256",
     "validate_core_report",
     "validate_core_report_for_collection",
-    "validate_public_summary",
+    "validate_core_summary",
 ]

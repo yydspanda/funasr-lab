@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yydspanda/funasr-lab/eval/custodian-receipt.schema.json",
+  "title": "funasr-lab sealed evaluation custodian receipt",
+  "description": "One canonical, restricted completion receipt for input export, prediction freeze, or sealed custodian scoring.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {},
+    "kind": {},
+    "state": {},
+    "access_class": {},
+    "experiment_id": {},
+    "dataset_id": {},
+    "revision": {},
+    "split": {},
+    "decode_item_count": {},
+    "expected_decode_item_count": {},
+    "prediction_item_count": {},
+    "missing_prediction_count": {},
+    "evaluation_scope": {},
+    "data_sha256": {},
+    "input_projection_sha256": {},
+    "record_identity_version": {},
+    "hypothesis_adapter_version": {},
+    "record_input_sha256": {},
+    "prediction_input_sha256": {},
+    "candidate_lock_sha256": {},
+    "candidate_freeze_sha256": {},
+    "prediction_artifact_sha256": {},
+    "prediction_items_sha256": {},
+    "scorer_code_commit": {},
+    "scorer_source_sha256": {},
+    "core_schema_version": {},
+    "core_sha256": {},
+    "public_release": {}
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/inputExportReceipt"},
+    {"$ref": "#/$defs/predictionFreezeReceipt"},
+    {"$ref": "#/$defs/custodianScoreReceipt"}
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "experimentId": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?$"
+    },
+    "shortString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "gitCommit": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "boundedCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "positiveBoundedCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "hypothesisAdapter": {
+      "enum": [
+        "identity-v1",
+        "sensevoice-control-tags-v1"
+      ]
+    },
+    "inputExportReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "state",
+        "access_class",
+        "experiment_id",
+        "dataset_id",
+        "revision",
+        "split",
+        "decode_item_count",
+        "input_projection_sha256",
+        "candidate_lock_sha256",
+        "candidate_freeze_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "asr-evaluation-input-export-receipt"},
+        "state": {"const": "complete"},
+        "access_class": {"const": "restricted"},
+        "experiment_id": {"$ref": "#/$defs/experimentId"},
+        "dataset_id": {"$ref": "#/$defs/shortString"},
+        "revision": {"$ref": "#/$defs/shortString"},
+        "split": {"const": "sealed-blind"},
+        "decode_item_count": {"$ref": "#/$defs/positiveBoundedCount"},
+        "input_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "predictionFreezeReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "state",
+        "access_class",
+        "experiment_id",
+        "dataset_id",
+        "revision",
+        "split",
+        "expected_decode_item_count",
+        "prediction_item_count",
+        "missing_prediction_count",
+        "input_projection_sha256",
+        "candidate_lock_sha256",
+        "candidate_freeze_sha256",
+        "hypothesis_adapter_version",
+        "prediction_artifact_sha256",
+        "prediction_items_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "asr-evaluation-prediction-freeze-receipt"},
+        "state": {"const": "complete"},
+        "access_class": {"const": "restricted"},
+        "experiment_id": {"$ref": "#/$defs/experimentId"},
+        "dataset_id": {"$ref": "#/$defs/shortString"},
+        "revision": {"$ref": "#/$defs/shortString"},
+        "split": {"const": "sealed-blind"},
+        "expected_decode_item_count": {"$ref": "#/$defs/positiveBoundedCount"},
+        "prediction_item_count": {"$ref": "#/$defs/boundedCount"},
+        "missing_prediction_count": {"$ref": "#/$defs/boundedCount"},
+        "input_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "hypothesis_adapter_version": {"$ref": "#/$defs/hypothesisAdapter"},
+        "prediction_artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_items_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "custodianScoreReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "state",
+        "access_class",
+        "experiment_id",
+        "dataset_id",
+        "revision",
+        "evaluation_scope",
+        "data_sha256",
+        "input_projection_sha256",
+        "record_identity_version",
+        "hypothesis_adapter_version",
+        "record_input_sha256",
+        "prediction_input_sha256",
+        "candidate_lock_sha256",
+        "candidate_freeze_sha256",
+        "prediction_artifact_sha256",
+        "prediction_items_sha256",
+        "scorer_code_commit",
+        "scorer_source_sha256",
+        "core_schema_version",
+        "core_sha256",
+        "public_release"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "asr-evaluation-custodian-score-receipt"},
+        "state": {"const": "complete"},
+        "access_class": {"const": "restricted"},
+        "experiment_id": {"$ref": "#/$defs/experimentId"},
+        "dataset_id": {"$ref": "#/$defs/shortString"},
+        "revision": {"$ref": "#/$defs/shortString"},
+        "evaluation_scope": {"$ref": "#/$defs/sealedEvaluationScope"},
+        "data_sha256": {"$ref": "#/$defs/sha256"},
+        "input_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "record_identity_version": {"const": "eval-core-record-input-v1"},
+        "hypothesis_adapter_version": {"$ref": "#/$defs/hypothesisAdapter"},
+        "record_input_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_input_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_items_sha256": {"$ref": "#/$defs/sha256"},
+        "scorer_code_commit": {"$ref": "#/$defs/gitCommit"},
+        "scorer_source_sha256": {"$ref": "#/$defs/sha256"},
+        "core_schema_version": {"const": 2},
+        "core_sha256": {"$ref": "#/$defs/sha256"},
+        "public_release": {"$ref": "#/$defs/withheldPublicRelease"}
+      }
+    },
+    "sealedEvaluationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "split"],
+      "properties": {
+        "kind": {"const": "split"},
+        "split": {"const": "sealed-blind"}
+      }
+    },
+    "withheldPublicRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "summary_sha256", "reason_code"],
+      "properties": {
+        "state": {"const": "withheld"},
+        "summary_sha256": {"const": null},
+        "reason_code": {"const": "release_policy_not_implemented"}
+      }
+    }
+  }
+}

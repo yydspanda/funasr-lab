@@ -1,7 +1,7 @@
 # ASR Benchmark Protocol
 
 > Status: **Draft to freeze under `EVAL-01`**
-> Updated: `2026-08-27`
+> Updated: `2026-08-28`
 
 This protocol prevents data, normalization, decoding, and hardware changes from
 being mistaken for model improvements. Until `EVAL-01` passes, results are
@@ -138,9 +138,10 @@ versioned scoring contracts, stable status/reason codes, integer components,
 exact rational denominators, items, and frozen slices. Generated time,
 performance measurements, absolute paths, argv, and raw exception text belong
 to a separate execution envelope. They cannot perturb the core bytes or hash.
-The full core is restricted because it contains references. A public summary
-binds its hash while removing item IDs, raw/reference/hypothesis text, and
-record/prediction projection hashes.
+The full core is restricted because it contains references. Its text-free core
+summary binds the core hash while removing item IDs, raw/reference/hypothesis
+text, and record/prediction projection hashes, but remains restricted. It is
+not a public artifact or authorization to publish sealed metrics.
 
 The sealed-blind descriptor exposes only logical identities, hashes, counts,
 aggregate coverage, and the seal policy. It binds independent hashes of an
@@ -148,6 +149,52 @@ audio/input projection and a restricted reference projection. Iterative runners
 receive only the former. An isolated scoring process joins the frozen
 hypothesis with the latter only after the candidate model, configuration,
 command, and hashes are frozen.
+
+The sealed audio projection uses schema version 2, omits every record whose
+data exclusion was frozen before decoding, and distinguishes the full sealed
+manifest count from the decode-eligible item count. The corresponding reference
+projection retains all sealed records so exclusions remain auditable. A blind
+core report uses the collection-owned `sealed-blind` scoring scope: its data
+hash still binds the full descriptor, while its ordered record-input hash binds
+only the sealed scoring records. Smoke or development items cannot be counted
+as missing blind predictions.
+
+For the initial export, the custodian validates planned-candidate metadata
+before it opens the full collection. It then opens sealed references only
+inside the restricted workflow to validate collection and scoring identity,
+and creates the canonical candidate lock plus reference-free audio projection.
+The decoder receives neither references nor authority to edit that lock. Before
+the score transition reopens sealed references, the custodian validates the
+existing lock and canonical prediction bundle as one complete chain. The lock
+freezes source/model/config/data/seed/command and hypothesis-adapter facts plus
+the sealed input/scoring identities. The prediction bundle binds that lock, the
+exact audio projection, ordered decode IDs, adapter, statuses, reason codes,
+and prediction-item hash. Decoder failures are explicit empty predictions;
+omitted decode IDs remain auditable as `missing_prediction` failures. Extra,
+duplicate, or reordered IDs are invalid. Execution metadata and exception
+detail stay in a separate restricted envelope.
+
+Each artifact transition writes all canonical restricted outputs into one
+private directory with mode `0600`; stdout is not evidence. Earlier artifacts
+are directory-synced before the receipt is published last as the completion
+marker. The score receipt binds the planned candidate freeze, candidate lock,
+exact prediction artifact/items, sealed input and scoped record identity,
+derived scoring input, core hash, committed scorer Git revision, and an exact
+inventory hash of the scoring source. A sealed score refuses source bytes that
+differ from that Git revision. A core without its matching receipt is an
+incomplete replay. Before an accuracy result is accepted, rejected, or marked
+for investigation, the terminal experiment manifest must preserve the same
+candidate facts, bind the input/lock/prediction/core/receipt artifacts, and
+match the core CER/MER components and counts. RTF, RSS, and other performance
+facts remain unverified until their separately hashed execution envelope is
+bound; the accuracy/lineage verifier does not certify their measurement origin.
+
+The offline custodian scorer emits only a restricted core report. A text-free
+aggregate projection is not automatically safe to publish: exact metrics over
+small cells or repeated candidate queries can act as a blind-reference oracle.
+Public release therefore requires a separately frozen one-candidate
+authorization and minimum-cell policy; until that contract is implemented, the
+core summary remains inside the restricted custodian workflow.
 
 Each executed experiment manifest must pass
 `scripts/check_experiment_manifests.py` and bind:

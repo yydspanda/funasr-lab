@@ -11,7 +11,7 @@
 - **Baseline Ref:** `v1.4.3`
 - **Baseline Commit:** `eedd4e22d10dc2e81d9c2bb321edb3750253964b`
 - **Baseline Date:** `2026-08-21`
-- **Last Updated:** `2026-08-27`
+- **Last Updated:** `2026-08-28`
 
 ## Stage Order
 
@@ -70,6 +70,15 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
 - Raw, content-normalized, and display-text results remain distinct.
 - A canonical collection descriptor validates rights/provenance, ordered split
   hashes, and speaker/session/source/lineage/dedup isolation in one replay.
+- Planned-candidate metadata is checked before the restricted custodian opens
+  the collection; the custodian-created lock then binds the exact sealed audio
+  projection, decode IDs, adapter, model/config/command facts, and sealed-only
+  scoring identity. The strict prediction bundle and lock are revalidated
+  before scoring reopens references.
+- Canonical restricted receipts make each artifact transition durable; the
+  score receipt binds candidate lock, predictions, sealed scope, core, and the
+  committed scorer-source identity while public release remains explicitly
+  withheld.
 - Deterministic core-report bytes exclude execution-only performance and raw
   exception details while preserving every missing, failed, empty, and frozen
   excluded item.

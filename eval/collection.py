@@ -767,14 +767,20 @@ def _sealed_input_projection_document(
 ) -> dict[str, Any]:
     manifest = _sealed_manifest(descriptor)
     sealed_records = [record for record in records if record["split"] == manifest.split]
+    decode_records = [
+        record
+        for record in sealed_records
+        if record["evaluation_status"] == "included"
+    ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": SEALED_INPUT_PROJECTION_KIND,
         "dataset_id": descriptor.dataset_id,
         "revision": descriptor.revision,
         "split": manifest.split,
         "manifest_sha256": manifest.sha256,
-        "record_count": manifest.record_count,
+        "manifest_record_count": manifest.record_count,
+        "item_count": len(decode_records),
         "items": [
             {
                 "id": record["id"],
@@ -786,7 +792,7 @@ def _sealed_input_projection_document(
                 "channels": record["channels"],
                 "sample_width_bits": record["sample_width_bits"],
             }
-            for record in sealed_records
+            for record in decode_records
         ],
     }
 
@@ -798,13 +804,14 @@ def _sealed_reference_projection_document(
     manifest = _sealed_manifest(descriptor)
     sealed_records = [record for record in records if record["split"] == manifest.split]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": SEALED_REFERENCE_PROJECTION_KIND,
         "dataset_id": descriptor.dataset_id,
         "revision": descriptor.revision,
         "split": manifest.split,
         "manifest_sha256": manifest.sha256,
-        "record_count": manifest.record_count,
+        "manifest_record_count": manifest.record_count,
+        "item_count": len(sealed_records),
         "items": [
             {
                 "id": record["id"],

@@ -18,7 +18,7 @@
     "items"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "kind": {"const": "asr-evaluation-core"},
     "access_class": {"const": "restricted"},
     "provenance": {
@@ -62,10 +62,31 @@
     "configuration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["slice_fields"],
+      "required": ["slice_fields", "evaluation_scope"],
       "properties": {
         "slice_fields": {
           "const": ["scenario_tags", "split"]
+        },
+        "evaluation_scope": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "collection"}
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "split"],
+              "properties": {
+                "kind": {"const": "split"},
+                "split": {"enum": ["smoke", "dev", "sealed-blind"]}
+              }
+            }
+          ]
         }
       }
     },

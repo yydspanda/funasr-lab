@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yydspanda/funasr-lab/eval/prediction-bundle.schema.json",
+  "title": "funasr-lab sealed evaluation prediction bundle",
+  "description": "Restricted, canonical predictions for one candidate lock. Items may be an ordered subsequence of sealed decode IDs; identity order, count equality, status relationships, and hashes are checked by eval/custodian_replay.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "state",
+    "access_class",
+    "dataset_id",
+    "revision",
+    "split",
+    "input_projection_sha256",
+    "candidate_lock_sha256",
+    "hypothesis_adapter_version",
+    "item_count",
+    "items_sha256",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "asr-evaluation-predictions"},
+    "state": {"const": "frozen"},
+    "access_class": {"const": "restricted"},
+    "dataset_id": {"$ref": "#/$defs/shortString"},
+    "revision": {"$ref": "#/$defs/shortString"},
+    "split": {"const": "sealed-blind"},
+    "input_projection_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+    "hypothesis_adapter_version": {"$ref": "#/$defs/hypothesisAdapter"},
+    "item_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "items_sha256": {"$ref": "#/$defs/sha256"},
+    "items": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {"$ref": "#/$defs/predictionItem"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "shortString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "hypothesisAdapter": {
+      "enum": [
+        "identity-v1",
+        "sensevoice-control-tags-v1"
+      ]
+    },
+    "predictionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "raw_text", "status", "reason_code"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "raw_text": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "status": {"enum": ["ok", "empty", "failed"]},
+        "reason_code": {
+          "type": ["string", "null"],
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        }
+      }
+    }
+  }
+}

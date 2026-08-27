@@ -21,6 +21,16 @@ from eval.collection import load_validated_collection
 from eval.collection import sha256_bytes
 from eval.collection import sha256_file
 from eval.collection import validate_collection
+from eval.core_report import canonical_core_bytes
+from eval.core_report import core_report_sha256
+from eval.core_report import validate_core_report
+from eval.custodian_replay import build_prediction_bundle
+from eval.custodian_replay import canonical_prediction_bundle_bytes
+from eval.custodian_replay import canonical_custodian_receipt_bytes
+from eval.custodian_replay import load_candidate_lock
+from eval.custodian_replay import load_custodian_receipt
+from eval.custodian_replay import load_sealed_input_projection
+from eval.custodian_replay import validate_terminal_manifest_for_receipt
 from eval.normalizers import NORMALIZER_VERSION
 from eval.record_identity import RECORD_IDENTITY_VERSION
 from eval.record_identity import record_input_sha256
@@ -151,6 +161,7 @@ class CollectionValidatorTest(unittest.TestCase):
         manifests = descriptor["manifests"]
         self.assertIsInstance(manifests, list)
         manifest = manifests[2]
+        sealed_records = records["sealed-blind"]
         if references:
             items = [
                 {
@@ -167,7 +178,7 @@ class CollectionValidatorTest(unittest.TestCase):
                     "evaluation_status": record["evaluation_status"],
                     "exclusion_reason": record["exclusion_reason"],
                 }
-                for record in records["sealed-blind"]
+                for record in sealed_records
             ]
             kind = "asr-sealed-reference-input"
         else:
@@ -182,17 +193,19 @@ class CollectionValidatorTest(unittest.TestCase):
                     "channels": record["channels"],
                     "sample_width_bits": record["sample_width_bits"],
                 }
-                for record in records["sealed-blind"]
+                for record in sealed_records
+                if record["evaluation_status"] == "included"
             ]
             kind = "asr-sealed-audio-input"
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": kind,
             "dataset_id": descriptor["dataset_id"],
             "revision": descriptor["revision"],
             "split": "sealed-blind",
             "manifest_sha256": manifest["sha256"],
-            "record_count": manifest["record_count"],
+            "manifest_record_count": manifest["record_count"],
+            "item_count": len(items),
             "items": items,
         }
 
@@ -370,6 +383,76 @@ class CollectionValidatorTest(unittest.TestCase):
         path.write_bytes(canonical_json_bytes(descriptor))
         return path, descriptor, records
 
+    def planned_candidate_manifest(self, data_sha256: str) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "experiment_id": "EXP-20260827-001-eval-fixture",
+            "task_id": "EVAL-01",
+            "hypothesis": (
+                "The frozen vanilla ASR candidate will produce a replayable "
+                "sealed-blind prediction artifact without exposing references."
+            ),
+            "upstream_commit": "eedd4e22d10dc2e81d9c2bb321edb3750253964b",
+            "code_commit": "c1aa9d3ba29ac8e1a1791147a42e9b9920d97843",
+            "models": [
+                {
+                    "role": "asr",
+                    "identifier": "iic/fixture-asr-model",
+                    "revision": "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692",
+                    "sha256": digest("fixture-model-inventory"),
+                }
+            ],
+            "config_sha256": digest("fixture-effective-config"),
+            "data_sha256": data_sha256,
+            "eval_data_version": "LAB-SEED-TEST-v0.1",
+            "normalizer_version": NORMALIZER_VERSION,
+            "hardware": {
+                "host_id": "fixture-cpu-host",
+                "os": "Linux fixture x86_64",
+                "cpu_model": "Fixture CPU Model",
+                "logical_cpu_count": 4,
+                "memory_bytes": 8_589_934_592,
+                "device": "cpu",
+                "accelerator": None,
+            },
+            "seed": 0,
+            "command": {
+                "working_directory": ".",
+                "argv": [
+                    ".venv/bin/python",
+                    "scripts/replay_asr_evaluation.py",
+                    "freeze-predictions",
+                    "--input-projection",
+                    "eval/private/fixture.input.json",
+                    "--candidate-lock",
+                    "eval/private/fixture.lock.json",
+                    "--raw-predictions",
+                    "eval/private/fixture.raw.jsonl",
+                    "--hypothesis-adapter-version",
+                    "identity-v1",
+                    "--output-predictions",
+                    "eval/private/fixture.predictions.json",
+                    "--output-receipt",
+                    "eval/private/fixture.prediction-receipt.json",
+                ],
+                "environment": {"PYTHONHASHSEED": "0"},
+            },
+            "metrics": None,
+            "artifacts": [],
+            "decision": "planned",
+        }
+
+    def write_planned_candidate_manifest(self, data_sha256: str) -> Path:
+        candidate = self.planned_candidate_manifest(data_sha256)
+        candidate_directory = self.root / "candidate-manifests"
+        candidate_directory.mkdir()
+        path = candidate_directory / f"{candidate['experiment_id']}.json"
+        path.write_text(
+            json.dumps(candidate, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
     def rewrite_bundle(
         self,
         descriptor_path: Path,
@@ -466,7 +549,10 @@ class CollectionValidatorTest(unittest.TestCase):
         self.assertEqual(projection["revision"], descriptor["revision"])
         self.assertEqual(projection["split"], "sealed-blind")
         self.assertEqual(projection["manifest_sha256"], manifests[2]["sha256"])
-        self.assertEqual(projection["record_count"], 1)
+        self.assertEqual(projection["schema_version"], 2)
+        self.assertEqual(projection["manifest_record_count"], 1)
+        self.assertEqual(projection["item_count"], 1)
+        self.assertNotIn("record_count", projection)
         self.assertEqual(
             sha256_bytes(projection_bytes),
             blind["input_projection_sha256"],
@@ -492,7 +578,530 @@ class CollectionValidatorTest(unittest.TestCase):
             projection_bytes,
         )
 
-    def test_blind_projection_hashes_are_rebuilt_from_full_sealed_records(self) -> None:
+    def test_predeclared_excluded_audio_is_not_exported_for_blind_decode(
+        self,
+    ) -> None:
+        descriptor_path, descriptor, records = self.write_bundle()
+        excluded = self.record(
+            "sealed-blind",
+            4,
+            access_class="sealed",
+            rights_group_id="rights-sealed",
+        )
+        excluded["evaluation_status"] = "excluded"
+        excluded["exclusion_reason"] = "predeclared_quality_gate"
+        records["sealed-blind"].append(excluded)
+        self.rewrite_bundle(descriptor_path, descriptor, records)
+
+        collection = load_validated_collection(
+            descriptor_path,
+            self.root,
+            self.root,
+        )
+        projection_bytes = build_sealed_input_projection(collection)
+        projection = json.loads(projection_bytes)
+        included = records["sealed-blind"][0]
+
+        self.assertEqual(projection["schema_version"], 2)
+        self.assertEqual(projection["manifest_record_count"], 2)
+        self.assertEqual(projection["item_count"], 1)
+        projected_ids = [item["id"] for item in projection["items"]]
+        self.assertEqual(projected_ids, [included["id"]])
+        self.assertNotIn(excluded["id"], projected_ids)
+        self.assertNotIn(str(excluded["audio"]).encode("utf-8"), projection_bytes)
+        self.assertNotIn(
+            str(excluded["audio_sha256"]).encode("ascii"),
+            projection_bytes,
+        )
+
+        reference_projection = self.sealed_projection_document(
+            descriptor,
+            records,
+            references=True,
+        )
+        self.assertEqual(reference_projection["schema_version"], 2)
+        self.assertEqual(reference_projection["manifest_record_count"], 2)
+        self.assertEqual(reference_projection["item_count"], 2)
+        self.assertNotIn("record_count", reference_projection)
+        reference_items = reference_projection["items"]
+        self.assertIsInstance(reference_items, list)
+        excluded_reference = next(
+            item for item in reference_items if item["id"] == excluded["id"]
+        )
+        self.assertEqual(excluded_reference["evaluation_status"], "excluded")
+        self.assertEqual(
+            excluded_reference["exclusion_reason"],
+            "predeclared_quality_gate",
+        )
+
+    def test_custodian_replay_rejects_an_all_excluded_sealed_split(self) -> None:
+        descriptor_path, descriptor, records = self.write_bundle()
+        sealed_record = records["sealed-blind"][0]
+        sealed_record["evaluation_status"] = "excluded"
+        sealed_record["exclusion_reason"] = "predeclared_quality_gate"
+        self.rewrite_bundle(descriptor_path, descriptor, records)
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        input_path = self.root / "must-not-export-input.json"
+        lock_path = self.root / "must-not-export-lock.json"
+        receipt_path = self.root / "must-not-export-receipt.json"
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "export-input",
+                "--descriptor",
+                str(descriptor_path),
+                "--collection-root",
+                str(self.root),
+                "--audio-root",
+                str(self.root),
+                "--candidate-manifest",
+                str(candidate_manifest_path),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-input",
+                str(input_path),
+                "--output-candidate-lock",
+                str(lock_path),
+                "--output-receipt",
+                str(receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn(b"decode-eligible", completed.stderr)
+        self.assertEqual(completed.stdout, b"")
+        self.assertFalse(input_path.exists())
+        self.assertFalse(lock_path.exists())
+        self.assertFalse(receipt_path.exists())
+        self.assertNotIn(
+            str(sealed_record["raw_text"]).encode("utf-8"), completed.stderr
+        )
+
+    def test_custodian_cli_rejects_aliased_outputs_before_reading_inputs(self) -> None:
+        shared_path = self.root / "shared-output.json"
+        receipt_path = self.root / "receipt.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "export-input",
+                "--descriptor",
+                str(self.root / "missing-descriptor.json"),
+                "--candidate-manifest",
+                str(self.root / "missing-candidate.json"),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-input",
+                str(shared_path),
+                "--output-candidate-lock",
+                str(shared_path),
+                "--output-receipt",
+                str(receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn(b"output paths must be distinct", completed.stderr)
+        self.assertNotIn(b"missing-descriptor", completed.stderr)
+        self.assertFalse(shared_path.exists())
+        self.assertFalse(receipt_path.exists())
+
+    def test_custodian_export_and_sealed_score_are_byte_stable(self) -> None:
+        descriptor_path, _, records = self.write_bundle()
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        input_path = self.root / "sealed-input.json"
+        lock_path = self.root / "candidate-lock.json"
+        export_receipt_path = self.root / "export-receipt.json"
+        exported = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "export-input",
+                "--descriptor",
+                str(descriptor_path),
+                "--collection-root",
+                str(self.root),
+                "--audio-root",
+                str(self.root),
+                "--candidate-manifest",
+                str(candidate_manifest_path),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-input",
+                str(input_path),
+                "--output-candidate-lock",
+                str(lock_path),
+                "--output-receipt",
+                str(export_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(exported.returncode, 0, exported.stderr.decode())
+        self.assertEqual(exported.stdout, b"")
+        export_receipt = load_custodian_receipt(export_receipt_path).document
+        self.assertEqual(export_receipt["split"], "sealed-blind")
+        self.assertEqual(export_receipt["decode_item_count"], 1)
+        self.assertEqual(input_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(lock_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(export_receipt_path.stat().st_mode & 0o777, 0o600)
+
+        sealed_input = load_sealed_input_projection(input_path)
+        candidate_lock = load_candidate_lock(lock_path)
+        sealed_records = records["sealed-blind"]
+        prediction_items = [
+            {
+                "id": record["id"],
+                "raw_text": record["raw_text"],
+                "status": "ok",
+                "reason_code": None,
+            }
+            for record in sealed_records
+            if record["evaluation_status"] == "included"
+        ]
+        raw_predictions_path = self.root / "raw-predictions.jsonl"
+        raw_predictions_path.write_bytes(
+            b"".join(canonical_json_bytes(item) for item in prediction_items)
+        )
+        predictions_path = self.root / "predictions.json"
+        prediction_receipt_path = self.root / "prediction-receipt.json"
+        frozen = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "freeze-predictions",
+                "--input-projection",
+                str(input_path),
+                "--candidate-lock",
+                str(lock_path),
+                "--raw-predictions",
+                str(raw_predictions_path),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-predictions",
+                str(predictions_path),
+                "--output-receipt",
+                str(prediction_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(frozen.returncode, 0, frozen.stderr.decode())
+        self.assertEqual(frozen.stdout, b"")
+        prediction_receipt = load_custodian_receipt(
+            prediction_receipt_path
+        ).document
+        self.assertEqual(prediction_receipt["missing_prediction_count"], 0)
+        self.assertEqual(predictions_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(prediction_receipt_path.stat().st_mode & 0o777, 0o600)
+
+        core_paths = [self.root / "first-core.json", self.root / "second-core.json"]
+        receipts: list[dict[str, object]] = []
+        for index, core_path in enumerate(core_paths):
+            receipt_path = self.root / f"score-receipt-{index}.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/replay_asr_evaluation.py",
+                    "score",
+                    "--descriptor",
+                    str(descriptor_path),
+                    "--collection-root",
+                    str(self.root),
+                    "--audio-root",
+                    str(self.root),
+                    "--input-projection",
+                    str(input_path),
+                    "--candidate-lock",
+                    str(lock_path),
+                    "--predictions",
+                    str(predictions_path),
+                    "--output-core",
+                    str(core_path),
+                    "--output-receipt",
+                    str(receipt_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            self.assertEqual(completed.stdout, b"")
+            receipts.append(load_custodian_receipt(receipt_path).document)
+            self.assertEqual(core_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+
+        self.assertEqual(core_paths[0].read_bytes(), core_paths[1].read_bytes())
+        report = json.loads(core_paths[0].read_bytes())
+        validate_core_report(report)
+        self.assertEqual(
+            report["configuration"]["evaluation_scope"],
+            {"kind": "split", "split": "sealed-blind"},
+        )
+        self.assertEqual(
+            [item["id"] for item in report["items"]],
+            [record["id"] for record in sealed_records],
+        )
+        self.assertEqual(report["counts"]["failed_count"], 0)
+        self.assertEqual(report["aggregate"]["cer"]["errors"], 0)
+        self.assertEqual(
+            core_paths[0].read_bytes(),
+            canonical_core_bytes(report),
+        )
+        self.assertEqual(receipts[0]["core_sha256"], core_report_sha256(report))
+        self.assertEqual(receipts[0], receipts[1])
+        self.assertEqual(receipts[0]["public_release"]["state"], "withheld")
+        self.assertEqual(receipts[0]["candidate_lock_sha256"], candidate_lock.sha256)
+        self.assertEqual(
+            receipts[0]["prediction_artifact_sha256"],
+            prediction_receipt["prediction_artifact_sha256"],
+        )
+        self.assertEqual(
+            receipts[0]["scorer_code_commit"],
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=REPOSITORY_ROOT,
+                text=True,
+            ).strip(),
+        )
+
+        cer = report["aggregate"]["cer"]
+        mer = report["aggregate"]["mer"]
+        terminal = self.planned_candidate_manifest(sha256_file(descriptor_path))
+        terminal["decision"] = "accept"
+        terminal["metrics"] = {
+            "content_cer": cer["errors"] / cer["reference_units"],
+            "substitutions": cer["substitutions"],
+            "deletions": cer["deletions"],
+            "insertions": cer["insertions"],
+            "reference_units": cer["reference_units"],
+            "utterance_count": report["counts"]["utterance_count"],
+            "failed_count": report["counts"]["failed_count"],
+            "mer": mer["errors"] / mer["reference_units"],
+            "rtf_p50": 0.1,
+            "rtf_p95": 0.1,
+            "peak_rss_mb": 1.0,
+        }
+        terminal["artifacts"] = [
+            {
+                "kind": "other",
+                "path": str(input_path),
+                "sha256": receipts[0]["input_projection_sha256"],
+            },
+            {
+                "kind": "other",
+                "path": str(lock_path),
+                "sha256": receipts[0]["candidate_lock_sha256"],
+            },
+            {
+                "kind": "prediction",
+                "path": str(predictions_path),
+                "sha256": receipts[0]["prediction_artifact_sha256"],
+            },
+            {
+                "kind": "report",
+                "path": str(core_paths[0]),
+                "sha256": receipts[0]["core_sha256"],
+            },
+            {
+                "kind": "other",
+                "path": str(self.root / "score-receipt-0.json"),
+                "sha256": sha256_bytes(
+                    canonical_custodian_receipt_bytes(receipts[0])
+                ),
+            },
+        ]
+        validate_terminal_manifest_for_receipt(terminal, receipts[0], report)
+        for receipt_path in (
+            export_receipt_path,
+            prediction_receipt_path,
+            self.root / "score-receipt-0.json",
+        ):
+            receipt_bytes = receipt_path.read_bytes()
+            for record in sealed_records:
+                self.assertNotIn(
+                    str(record["raw_text"]).encode("utf-8"), receipt_bytes
+                )
+        self.assertEqual(list(self.root.glob("*summary*")), [])
+
+        missing_raw_path = self.root / "missing-raw-predictions.jsonl"
+        missing_raw_path.write_bytes(b"")
+        missing_predictions_path = self.root / "missing-predictions.json"
+        missing_prediction_receipt_path = (
+            self.root / "missing-prediction-receipt.json"
+        )
+        frozen_missing = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "freeze-predictions",
+                "--input-projection",
+                str(input_path),
+                "--candidate-lock",
+                str(lock_path),
+                "--raw-predictions",
+                str(missing_raw_path),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-predictions",
+                str(missing_predictions_path),
+                "--output-receipt",
+                str(missing_prediction_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(
+            frozen_missing.returncode, 0, frozen_missing.stderr.decode()
+        )
+        missing_prediction_receipt = load_custodian_receipt(
+            missing_prediction_receipt_path
+        ).document
+        self.assertEqual(missing_prediction_receipt["prediction_item_count"], 0)
+        self.assertEqual(missing_prediction_receipt["missing_prediction_count"], 1)
+
+        missing_core_path = self.root / "missing-core.json"
+        missing_score_receipt_path = self.root / "missing-score-receipt.json"
+        scored_missing = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "score",
+                "--descriptor",
+                str(descriptor_path),
+                "--collection-root",
+                str(self.root),
+                "--audio-root",
+                str(self.root),
+                "--input-projection",
+                str(input_path),
+                "--candidate-lock",
+                str(lock_path),
+                "--predictions",
+                str(missing_predictions_path),
+                "--output-core",
+                str(missing_core_path),
+                "--output-receipt",
+                str(missing_score_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(scored_missing.returncode, 0, scored_missing.stderr.decode())
+        missing_report = json.loads(missing_core_path.read_bytes())
+        self.assertEqual(missing_report["counts"]["failed_count"], 1)
+        self.assertEqual(missing_report["items"][0]["status"], "failed")
+        self.assertEqual(
+            missing_report["items"][0]["reason_code"], "missing_prediction"
+        )
+
+    def test_custodian_preflight_rejects_changed_prediction_lock(self) -> None:
+        descriptor_path, _, records = self.write_bundle()
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        input_path = self.root / "sealed-input.json"
+        lock_path = self.root / "candidate-lock.json"
+        export_receipt_path = self.root / "export-receipt.json"
+        exported = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "export-input",
+                "--descriptor",
+                str(descriptor_path),
+                "--collection-root",
+                str(self.root),
+                "--audio-root",
+                str(self.root),
+                "--candidate-manifest",
+                str(candidate_manifest_path),
+                "--hypothesis-adapter-version",
+                "identity-v1",
+                "--output-input",
+                str(input_path),
+                "--output-candidate-lock",
+                str(lock_path),
+                "--output-receipt",
+                str(export_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(exported.returncode, 0, exported.stderr.decode())
+
+        sealed_input = load_sealed_input_projection(input_path)
+        candidate_lock = load_candidate_lock(lock_path)
+        sealed_record = records["sealed-blind"][0]
+        prediction_bundle = build_prediction_bundle(
+            sealed_input,
+            candidate_lock.sha256,
+            [
+                {
+                    "id": sealed_record["id"],
+                    "raw_text": sealed_record["raw_text"],
+                    "status": "ok",
+                    "reason_code": None,
+                }
+            ],
+            hypothesis_adapter_version="identity-v1",
+        )
+        prediction_bundle["candidate_lock_sha256"] = digest("different-lock")
+        predictions_path = self.root / "predictions.json"
+        predictions_path.write_bytes(
+            canonical_prediction_bundle_bytes(prediction_bundle)
+        )
+        core_path = self.root / "must-not-exist.json"
+        score_receipt_path = self.root / "must-not-exist-receipt.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/replay_asr_evaluation.py",
+                "score",
+                "--descriptor",
+                str(descriptor_path),
+                "--collection-root",
+                str(self.root),
+                "--audio-root",
+                str(self.root),
+                "--input-projection",
+                str(input_path),
+                "--candidate-lock",
+                str(lock_path),
+                "--predictions",
+                str(predictions_path),
+                "--output-core",
+                str(core_path),
+                "--output-receipt",
+                str(score_receipt_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, b"")
+        self.assertFalse(core_path.exists())
+        self.assertFalse(score_receipt_path.exists())
+        self.assertNotIn(str(sealed_record["raw_text"]).encode("utf-8"), completed.stderr)
+        self.assertNotIn(str(sealed_record["id"]).encode("utf-8"), completed.stderr)
+
+    def test_blind_projection_hashes_are_rebuilt_from_sealed_contract(self) -> None:
         for field in (
             "input_projection_sha256",
             "reference_projection_sha256",

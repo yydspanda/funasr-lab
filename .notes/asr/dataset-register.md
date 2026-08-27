@@ -1,7 +1,7 @@
 # Dataset Register
 
 > Status: **BASE diagnostic registered; product evaluation remains pending `EVAL-01`**
-> Updated: `2026-08-27`
+> Updated: `2026-08-28`
 
 This register identifies data and split lineage. Audio and large generated
 artifacts stay outside Git; versioned manifests and hashes are the evidence.
@@ -75,7 +75,14 @@ references. It binds the hashes of both projections. The iterative runner sees
 only the audio projection; the reference projection remains in restricted
 untracked storage and is joined with frozen hypotheses by the blind-set
 custodian after candidate selection is closed. The full core report stays
-restricted; only its text-free aggregate summary is publishable.
+restricted. Projection schema version 2 omits predeclared excluded audio from
+the decoder handoff while retaining those records in the restricted reference
+projection and core accounting. A text-free aggregate is not publishable until
+the separate one-candidate authorization and minimum-cell release policy pass.
+The restricted score receipt is the durable completion marker that binds the
+candidate lock, prediction artifact, sealed scoring identity, core hash, and
+committed scorer-source inventory; stdout and an unpaired core do not count as
+replay evidence.
 
 ## Initial Coverage Target
 

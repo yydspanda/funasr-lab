@@ -53,10 +53,12 @@ scored as empty failures; duplicate or extra prediction IDs fail validation.
 Only a data exclusion declared before decoding is omitted from the denominator,
 and it remains explicitly counted.
 
-`core-summary.schema.json` defines the blind-safe public projection. It binds
+`core-summary.schema.json` defines a restricted text-free projection. It binds
 the restricted core hash and keeps only scoring/config identity plus aggregate
 and slice counts/metrics; it contains no item IDs, references, hypotheses, or
-record/prediction projection hashes.
+record/prediction projection hashes. It remains `access_class: restricted` and
+is not a release artifact. A future one-candidate and minimum-cell workflow must
+produce a distinct public artifact and release receipt.
 
 `collection.py` validates the EVAL collection as one unit rather than accepting
 individual split files in isolation. The canonical descriptor binds all split
@@ -89,6 +91,83 @@ not receive the separately held reference projection.
 The custodian uses `load_validated_collection` and exports only the canonical,
 reference-free bytes returned by `build_sealed_input_projection` to decode
 workers.
+
+### Sealed custodian replay
+
+`scripts/replay_asr_evaluation.py` implements the three restricted artifact
+transitions without importing FunASR or exposing a metric on stdout:
+
+1. `export-input` validates the whole planned-manifest directory, Git
+   provenance, and candidate metadata before opening sealed references. The
+   restricted custodian then validates the full collection and writes the
+   reference-free sealed input, a custodian-owned candidate lock, and an export
+   receipt. The lock is therefore created inside the blind workflow, not
+   supplied by the decoder.
+2. The frozen candidate decoder reads the sealed input and referenced audio,
+   but never the descriptor or reference manifests. It writes one JSON object
+   per returned item to a raw JSONL file with exactly `id`, `raw_text`,
+   `status`, and `reason_code`. `freeze-predictions` converts that reference-free
+   file into the canonical prediction bundle and a prediction receipt. Missing
+   decode IDs are intentionally allowed and become `missing_prediction`
+   failures during scoring; extra, duplicate, or out-of-order IDs are rejected.
+3. `score` validates the complete input/lock/prediction chain before opening
+   sealed references, then writes a sealed-only core and the authoritative score
+   receipt. The receipt binds the candidate lock, prediction bundle, scoped
+   record/prediction inputs, core hash, committed scorer revision, and exact
+   scoring-source inventory hash. Scoring refuses if any inventoried source
+   differs from the recorded HEAD commit. Its public-release state remains
+   `withheld` until a separate authorization and minimum-cell policy exists.
+
+The candidate lock is custodian-owned; a decode worker needs the sealed input
+and the expected lock identity, not authority to edit the lock. The planned
+manifest's command must record the complete real decoder pipeline and exactly
+one matching `--hypothesis-adapter-version`. This replay command only freezes
+and scores its outputs; it is not a model runner and does not download a model.
+
+For a real run, first commit the scorer implementation, then pre-create one
+mode-`0700`, non-symlink output directory and use new paths in that same
+directory for every transition. All outputs are canonical, mode `0600`,
+published without overwrite, and rolled back together on a handled failure.
+Each preceding artifact is directory-synced before the receipt is published
+last as the completion marker; a core without its matching receipt is
+incomplete evidence. Successful commands are silent. Stdout is never an
+authoritative receipt.
+
+```bash
+mkdir -m 700 eval/private/replay-001
+
+.venv/bin/python scripts/replay_asr_evaluation.py export-input \
+  --descriptor eval/private/LAB-SEED-001-v0.1.collection.json \
+  --collection-root . --audio-root . \
+  --candidate-manifest experiments/manifests/EXP-YYYYMMDD-NNN-candidate.json \
+  --hypothesis-adapter-version identity-v1 \
+  --output-input eval/private/replay-001/sealed-input.json \
+  --output-candidate-lock eval/private/replay-001/candidate-lock.json \
+  --output-receipt eval/private/replay-001/export-receipt.json
+
+.venv/bin/python scripts/replay_asr_evaluation.py freeze-predictions \
+  --input-projection eval/private/replay-001/sealed-input.json \
+  --candidate-lock eval/private/replay-001/candidate-lock.json \
+  --raw-predictions eval/private/replay-001/raw-predictions.jsonl \
+  --hypothesis-adapter-version identity-v1 \
+  --output-predictions eval/private/replay-001/predictions.json \
+  --output-receipt eval/private/replay-001/prediction-receipt.json
+
+.venv/bin/python scripts/replay_asr_evaluation.py score \
+  --descriptor eval/private/LAB-SEED-001-v0.1.collection.json \
+  --collection-root . --audio-root . \
+  --input-projection eval/private/replay-001/sealed-input.json \
+  --candidate-lock eval/private/replay-001/candidate-lock.json \
+  --predictions eval/private/replay-001/predictions.json \
+  --output-core eval/private/replay-001/core.json \
+  --output-receipt eval/private/replay-001/score-receipt.json
+```
+
+The external contracts are reviewable in `candidate-lock.schema.json`,
+`prediction-bundle.schema.json`, and `custodian-receipt.schema.json`. JSON
+Schema fixes shape and resource bounds; Python validation additionally checks
+hash parity, candidate/adapter identity, ID order, count arithmetic, and
+cross-artifact ownership.
 
 ## BASE-01 Offline Runner
 

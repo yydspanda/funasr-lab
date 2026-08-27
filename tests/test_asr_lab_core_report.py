@@ -6,17 +6,19 @@ from pathlib import Path
 from eval.collection import ValidatedCollection
 from eval.core_report import ALIGNMENT_VERSION
 from eval.core_report import CORE_KIND
-from eval.core_report import PUBLIC_SUMMARY_KIND
+from eval.core_report import CORE_SCHEMA_VERSION
+from eval.core_report import CORE_SUMMARY_KIND
 from eval.core_report import SENSEVOICE_HYPOTHESIS_ADAPTER_VERSION
 from eval.core_report import CoreReportValidationError
 from eval.core_report import build_core_report
-from eval.core_report import build_public_summary
+from eval.core_report import build_core_summary
+from eval.core_report import build_split_core_report
 from eval.core_report import canonical_core_bytes
-from eval.core_report import canonical_public_summary_bytes
+from eval.core_report import canonical_core_summary_bytes
 from eval.core_report import core_report_sha256
 from eval.core_report import validate_core_report
 from eval.core_report import validate_core_report_for_collection
-from eval.core_report import validate_public_summary
+from eval.core_report import validate_core_summary
 from eval.offline_baseline import strip_sensevoice_tags
 from eval.record_identity import RECORD_IDENTITY_VERSION
 from eval.record_identity import record_input_sha256
@@ -122,6 +124,7 @@ class CoreReportTest(unittest.TestCase):
         report = self.build()
 
         self.assertEqual(report["kind"], CORE_KIND)
+        self.assertEqual(report["schema_version"], CORE_SCHEMA_VERSION)
         self.assertEqual(report["access_class"], "restricted")
         self.assertEqual(
             report["provenance"]["record_identity_version"],
@@ -139,6 +142,9 @@ class CoreReportTest(unittest.TestCase):
         self.assertEqual(
             report["configuration"]["slice_fields"],
             ["scenario_tags", "split"],
+        )
+        self.assertEqual(
+            report["configuration"]["evaluation_scope"], {"kind": "collection"}
         )
 
         by_id = {item["id"]: item for item in report["items"]}
@@ -466,6 +472,82 @@ class CoreReportTest(unittest.TestCase):
         self.assertEqual(
             report["provenance"]["record_input_sha256"], expected_digest
         )
+        self.assertEqual(
+            report["configuration"]["evaluation_scope"], {"kind": "collection"}
+        )
+
+    def test_split_report_is_collection_owned_and_binds_selected_record_order(self):
+        collection = self.collection(self.records())
+        report = build_split_core_report(
+            collection,
+            [{"id": "ok-mixed", "raw_text": "你号 word"}],
+            split="dev",
+        )
+
+        selected_records = tuple(
+            record for record in collection.records if record["split"] == "dev"
+        )
+        self.assertEqual(
+            report["configuration"]["evaluation_scope"],
+            {"kind": "split", "split": "dev"},
+        )
+        self.assertEqual(
+            [item["id"] for item in report["items"]],
+            [record["id"] for record in selected_records],
+        )
+        self.assertEqual(
+            report["provenance"]["data_sha256"],
+            collection.summary["data_sha256"],
+        )
+        self.assertEqual(
+            report["provenance"]["record_input_sha256"],
+            record_input_sha256(selected_records),
+        )
+        self.assertNotEqual(
+            report["provenance"]["record_input_sha256"],
+            collection.summary["record_input_sha256"],
+        )
+        validate_core_report_for_collection(report, collection)
+
+        summary = build_core_summary(report)
+        self.assertEqual(
+            summary["configuration"]["evaluation_scope"],
+            {"kind": "split", "split": "dev"},
+        )
+        validate_core_summary(summary, source_core=report)
+
+    def test_split_report_rejects_invalid_scope_and_other_split_predictions(self):
+        collection = self.collection(self.records())
+        with self.assertRaisesRegex(CoreReportValidationError, "must be one of"):
+            build_split_core_report(collection, [], split="blind")
+
+        with self.assertRaisesRegex(CoreReportValidationError, "absent from frozen"):
+            build_split_core_report(
+                collection,
+                [{"id": "empty", "raw_text": "空"}],
+                split="dev",
+            )
+
+    def test_collection_binding_recomputes_record_identity_from_report_scope(self):
+        collection = self.collection(self.records())
+        report = build_split_core_report(
+            collection,
+            [{"id": "ok-mixed", "raw_text": "你号 word"}],
+            split="dev",
+        )
+
+        widened_scope = copy.deepcopy(report)
+        widened_scope["configuration"]["evaluation_scope"] = {
+            "kind": "collection"
+        }
+        validate_core_report(widened_scope)
+        with self.assertRaisesRegex(CoreReportValidationError, "selected collection"):
+            validate_core_report_for_collection(widened_scope, collection)
+
+        wrong_split = copy.deepcopy(report)
+        wrong_split["configuration"]["evaluation_scope"]["split"] = "sealed-blind"
+        with self.assertRaisesRegex(CoreReportValidationError, "split scope"):
+            validate_core_report_for_collection(wrong_split, collection)
 
     def test_report_is_atomically_bound_to_its_validated_collection(self):
         records = [
@@ -537,7 +619,10 @@ class CoreReportTest(unittest.TestCase):
         self.assertEqual(
             schema["$schema"], "https://json-schema.org/draft/2020-12/schema"
         )
-        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(
+            schema["properties"]["schema_version"]["const"],
+            CORE_SCHEMA_VERSION,
+        )
         self.assertEqual(schema["properties"]["kind"]["const"], CORE_KIND)
         self.assertEqual(schema["properties"]["access_class"]["const"], "restricted")
         self.assertEqual(
@@ -550,6 +635,13 @@ class CoreReportTest(unittest.TestCase):
             ],
             ["scenario_tags", "split"],
         )
+        scope_schema = schema["properties"]["configuration"]["properties"][
+            "evaluation_scope"
+        ]
+        self.assertEqual(
+            scope_schema["oneOf"][1]["properties"]["split"]["enum"],
+            ["smoke", "dev", "sealed-blind"],
+        )
         self.assertIn("rate", schema["$defs"]["metric"]["required"])
         self.assertIn("rate_decimal", schema["$defs"]["metric"]["required"])
         self.assertIn(
@@ -557,7 +649,7 @@ class CoreReportTest(unittest.TestCase):
             schema["$defs"]["item"]["properties"]["status"]["enum"],
         )
 
-    def test_public_summary_is_bound_to_core_and_contains_no_blind_item_text(self):
+    def test_restricted_core_summary_is_bound_and_contains_no_item_text(self):
         secret_id = "sealed-secret-utterance"
         secret_reference = "盲测绝密参考文本"
         secret_hypothesis = "盲测错误假设文本"
@@ -572,12 +664,12 @@ class CoreReportTest(unittest.TestCase):
             [{"id": secret_id, "raw_text": secret_hypothesis}],
         )
 
-        summary = build_public_summary(core)
-        validate_public_summary(summary, source_core=core)
-        payload = canonical_public_summary_bytes(summary)
+        summary = build_core_summary(core)
+        validate_core_summary(summary, source_core=core)
+        payload = canonical_core_summary_bytes(summary)
 
-        self.assertEqual(summary["kind"], PUBLIC_SUMMARY_KIND)
-        self.assertEqual(summary["access_class"], "public")
+        self.assertEqual(summary["kind"], CORE_SUMMARY_KIND)
+        self.assertEqual(summary["access_class"], "restricted")
         self.assertEqual(summary["core_sha256"], core_report_sha256(core))
         self.assertNotIn("items", summary)
         self.assertNotIn("provenance", summary)
@@ -590,7 +682,7 @@ class CoreReportTest(unittest.TestCase):
             '"item_ids"',
         ):
             self.assertNotIn(blind_value.encode("utf-8"), payload)
-        self.assertEqual(payload, canonical_public_summary_bytes(summary))
+        self.assertEqual(payload, canonical_core_summary_bytes(summary))
 
         summary_schema = json.loads(
             (REPOSITORY_ROOT / "eval/core-summary.schema.json").read_text(
@@ -598,7 +690,15 @@ class CoreReportTest(unittest.TestCase):
             )
         )
         self.assertEqual(
-            summary_schema["properties"]["kind"]["const"], PUBLIC_SUMMARY_KIND
+            summary_schema["properties"]["kind"]["const"], CORE_SUMMARY_KIND
+        )
+        self.assertEqual(
+            summary_schema["properties"]["access_class"]["const"],
+            "restricted",
+        )
+        self.assertEqual(
+            summary_schema["properties"]["schema_version"]["const"],
+            CORE_SCHEMA_VERSION,
         )
         self.assertEqual(
             summary_schema["properties"]["configuration"]["properties"][

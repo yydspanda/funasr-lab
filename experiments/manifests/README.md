@@ -66,3 +66,34 @@ branch and create the planned manifest in a later commit using that already
 reachable target-branch SHA. Execute exactly that SHA. Record results by updating
 the same manifest afterward. Do not point a manifest at a feature-branch commit
 that squash or rebase merge can rewrite.
+
+## Sealed EVAL Candidate Lifecycle
+
+A sealed replay candidate uses `task_id: "EVAL-01"`, remains `planned`, and is
+named exactly `<experiment_id>.json` when `export-input` creates its candidate
+lock. The command runs this directory's complete format, task-registry, commit,
+baseline-history, checked-out ancestry, and durable `origin/develop` ancestry
+checks before any sealed reference manifest is opened. For real evidence, land
+the planned manifest and let CI pass before the custodian starts the replay;
+local validation alone does not prove that prior registration happened.
+
+The immutable candidate projection contains source/code commits, all model
+identities and hashes, config/data identity, dataset and normalizer versions,
+hardware, seed, and the full command. It excludes `decision`, `metrics`, and
+`artifacts`, so the same `candidate_freeze_sha256` must survive the later result
+update. The candidate command must freeze exactly one
+`--hypothesis-adapter-version` matching the custodian lock.
+
+After scoring, keep the input-export, prediction-freeze, and score receipts with
+the private run artifacts. The score receipt is the authoritative completion
+marker and binds candidate-lock, prediction-bundle, restricted-core, and scorer
+source identities; stdout is not evidence. When updating the manifest to
+`accept`, `reject`, or `investigate`, pass the terminal manifest, score receipt,
+and restricted core to
+`eval.custodian_replay.validate_terminal_manifest_for_receipt()`. It verifies
+the frozen candidate, dataset/normalizer/adapter lineage, core CER/MER values and
+counts, plus hashed input/lock/prediction/core/receipt artifacts. Include
+`metrics.mer`, using `null` only when the core MER denominator is zero. The
+helper does not prove the origin of RTF/RSS values; those still require the
+separately hashed execution envelope. No public summary may be released while
+the receipt says `public_release.state` is `withheld`.

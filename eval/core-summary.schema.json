@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yydspanda/funasr-lab/eval/core-summary.schema.json",
-  "title": "Blind-safe ASR evaluation public summary",
-  "description": "Public aggregate projection bound to a restricted full core hash; it contains no item ids, references, hypotheses, or scoring units.",
+  "title": "Restricted text-free ASR evaluation core summary",
+  "description": "Restricted aggregate projection bound to a full core hash. It contains no item ids, references, hypotheses, or scoring units, but remains restricted and cannot authorize release of sealed-set metrics. A future release workflow must enforce one-candidate and minimum-cell policies and create a distinct public artifact.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,9 +17,9 @@
     "slices"
   ],
   "properties": {
-    "schema_version": {"const": 1},
-    "kind": {"const": "asr-evaluation-public-summary"},
-    "access_class": {"const": "public"},
+    "schema_version": {"const": 2},
+    "kind": {"const": "asr-evaluation-core-summary"},
+    "access_class": {"const": "restricted"},
     "core_sha256": {"$ref": "#/$defs/sha256"},
     "scoring": {
       "type": "object",
@@ -46,10 +46,31 @@
     "configuration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["slice_fields"],
+      "required": ["slice_fields", "evaluation_scope"],
       "properties": {
         "slice_fields": {
           "const": ["scenario_tags", "split"]
+        },
+        "evaluation_scope": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "collection"}
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "split"],
+              "properties": {
+                "kind": {"const": "split"},
+                "split": {"enum": ["smoke", "dev", "sealed-blind"]}
+              }
+            }
+          ]
         }
       }
     },
