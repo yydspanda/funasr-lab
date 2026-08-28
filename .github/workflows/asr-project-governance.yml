@@ -17,7 +17,7 @@ concurrency:
 jobs:
   lightweight-governance:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check out full baseline history
         uses: actions/checkout@v4
@@ -28,6 +28,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.9"
+          enable-cache: true
+          cache-dependency-glob: requirements/lab-cpu.lock
+
+      - name: Provision exact locked CPU lab runtime (no model download)
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip sync --python .venv/bin/python --torch-backend cpu \
+            requirements/lab-cpu.lock
+          .venv/bin/python scripts/asr_lab_doctor.py --strict-base-env
 
       - name: Validate Roadmap and Progress
         run: |
@@ -41,12 +55,12 @@ jobs:
           python scripts/check_experiment_manifests.py \
             --code-ref refs/remotes/origin/develop
 
-      - name: Run lightweight lab unit tests
+      - name: Run lab unit and sealed integration tests
         run: |
-          python -m unittest discover -s tests -p 'test_asr_lab_*.py' -v
-          python -m unittest discover -s tests -p 'test_*_governance.py' -v
+          .venv/bin/python -m unittest discover -s tests -p 'test_asr_lab_*.py' -v
+          .venv/bin/python -m unittest discover -s tests -p 'test_*_governance.py' -v
 
-      - name: Compile lightweight Python surfaces
+      - name: Compile governed Python surfaces
         run: >-
           python -m compileall -q
           asr_lab

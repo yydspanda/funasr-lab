@@ -34,19 +34,28 @@ from eval.core_report import SENSEVOICE_HYPOTHESIS_ADAPTER_VERSION
 from eval.core_report import adapt_hypothesis
 from eval.core_report import canonical_core_bytes
 from eval.core_report import validate_core_report
+from eval.execution_envelope import ExecutionEnvelopeError
+from eval.execution_envelope import LoadedExecutionEnvelope
+from eval.execution_envelope import canonical_execution_envelope_bytes
+from eval.execution_envelope import peak_rss_mib
+from eval.execution_envelope import validate_execution_envelope
+from eval.execution_envelope import validate_execution_envelope_for_predictions
 from eval.record_identity import RECORD_IDENTITY_VERSION
 from eval.record_identity import RecordIdentityError
 from eval.record_identity import record_input_sha256
+from eval.sealed_candidate_contract import SealedCandidateContractError
+from eval.sealed_candidate_contract import validate_sealed_candidate_execution
 from scripts.check_experiment_manifests import validate_directory
 from scripts.check_experiment_manifests import validate_manifest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-CANDIDATE_LOCK_SCHEMA_VERSION = 1
+TRUSTED_GIT_PATH = Path("/usr/bin/git")
+CANDIDATE_LOCK_SCHEMA_VERSION = 2
 CANDIDATE_LOCK_KIND = "asr-evaluation-candidate-lock"
-PREDICTION_BUNDLE_SCHEMA_VERSION = 1
+PREDICTION_BUNDLE_SCHEMA_VERSION = 2
 PREDICTION_BUNDLE_KIND = "asr-evaluation-predictions"
-RECEIPT_SCHEMA_VERSION = 1
+RECEIPT_SCHEMA_VERSION = 2
 INPUT_EXPORT_RECEIPT_KIND = "asr-evaluation-input-export-receipt"
 PREDICTION_FREEZE_RECEIPT_KIND = "asr-evaluation-prediction-freeze-receipt"
 CUSTODIAN_SCORE_RECEIPT_KIND = "asr-evaluation-custodian-score-receipt"
@@ -69,16 +78,34 @@ EXPERIMENT_ID_PATTERN = re.compile(
     r"^EXP-[0-9]{8}-[0-9]{3}(?:-[a-z0-9-]+)?$"
 )
 REASON_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+PYTHON_VERSION_PATTERN = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+(?:[A-Za-z0-9.+-]*)?$"
+)
+PYTHON_CACHE_TAG_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+UNICODE_VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+
+CANDIDATE_REGISTRATION_FIELD_NAMES = (
+    "candidate_registration_commit",
+    "candidate_manifest_path",
+    "candidate_manifest_sha256",
+)
 
 SCORER_SOURCE_PATHS = (
+    "eval/__init__.py",
     "eval/collection.py",
     "eval/core_report.py",
     "eval/custodian_replay.py",
+    "eval/execution_envelope.py",
     "eval/normalizers/__init__.py",
     "eval/normalizers/zh_content.py",
+    "eval/offline_baseline.py",
     "eval/record_identity.py",
     "eval/scoring.py",
+    "eval/sealed_candidate_contract.py",
+    "eval/sealed_decoder.py",
+    "requirements/lab-cpu.lock",
     "scripts/check_experiment_manifests.py",
+    "scripts/__init__.py",
     "scripts/replay_asr_evaluation.py",
 )
 
@@ -125,6 +152,9 @@ CANDIDATE_LOCK_FIELDS = frozenset(
         "decode_item_count",
         "decode_item_ids_sha256",
         "source_manifest_decision",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
         "candidate",
         "candidate_freeze_sha256",
     }
@@ -141,6 +171,9 @@ PREDICTION_BUNDLE_FIELDS = frozenset(
         "split",
         "input_projection_sha256",
         "candidate_lock_sha256",
+        "input_export_receipt_sha256",
+        "raw_predictions_sha256",
+        "execution_envelope_sha256",
         "hypothesis_adapter_version",
         "item_count",
         "items_sha256",
@@ -150,6 +183,30 @@ PREDICTION_BUNDLE_FIELDS = frozenset(
 
 PREDICTION_ITEM_FIELDS = frozenset(
     {"id", "raw_text", "status", "reason_code"}
+)
+
+TERMINAL_METRIC_FIELDS = frozenset(
+    {
+        "content_cer",
+        "substitutions",
+        "deletions",
+        "insertions",
+        "reference_units",
+        "utterance_count",
+        "failed_count",
+        "excluded_count",
+        "mer",
+        "rtf_p50",
+        "rtf_p95",
+        "peak_rss_mb",
+        "rtf_attempted_count",
+        "retried_count",
+        "model_load_seconds",
+        "cold_inference_seconds",
+        "cold_start_seconds",
+        "warm_wall_seconds",
+        "warm_audio_seconds",
+    }
 )
 
 INPUT_EXPORT_RECEIPT_FIELDS = frozenset(
@@ -166,6 +223,9 @@ INPUT_EXPORT_RECEIPT_FIELDS = frozenset(
         "input_projection_sha256",
         "candidate_lock_sha256",
         "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
     }
 )
 
@@ -185,9 +245,17 @@ PREDICTION_FREEZE_RECEIPT_FIELDS = frozenset(
         "input_projection_sha256",
         "candidate_lock_sha256",
         "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
         "hypothesis_adapter_version",
         "prediction_artifact_sha256",
         "prediction_items_sha256",
+        "input_export_receipt_sha256",
+        "raw_predictions_sha256",
+        "execution_envelope_sha256",
+        "runner_code_commit",
+        "runner_source_sha256",
     }
 )
 
@@ -209,13 +277,34 @@ CUSTODIAN_SCORE_RECEIPT_FIELDS = frozenset(
         "prediction_input_sha256",
         "candidate_lock_sha256",
         "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
         "prediction_artifact_sha256",
         "prediction_items_sha256",
+        "input_export_receipt_sha256",
+        "prediction_freeze_receipt_sha256",
+        "execution_envelope_sha256",
+        "runner_code_commit",
+        "runner_source_sha256",
         "scorer_code_commit",
         "scorer_source_sha256",
+        "scorer_runtime",
         "core_schema_version",
         "core_sha256",
         "public_release",
+    }
+)
+
+SCORER_RUNTIME_FIELDS = frozenset(
+    {
+        "python_implementation",
+        "python_version",
+        "python_cache_tag",
+        "dependency_lock_sha256",
+        "installed_dependencies_sha256",
+        "installed_dependency_count",
+        "unicode_version",
     }
 )
 
@@ -270,6 +359,26 @@ class LoadedArtifact:
     document: dict[str, Any]
     payload: bytes
     sha256: str
+
+
+@dataclass(frozen=True)
+class LoadedPredictionItems:
+    """Strict raw decoder JSONL plus its exact byte identity."""
+
+    items: tuple[dict[str, Any], ...]
+    payload: bytes
+    sha256: str
+
+
+@dataclass(frozen=True)
+class RegisteredCandidateManifest:
+    """One planned manifest proven byte-identical to a reachable Git blob."""
+
+    document: dict[str, Any]
+    payload: bytes
+    sha256: str
+    repository_path: str
+    registration_commit: str
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -349,20 +458,101 @@ def _bounded_nonnegative_integer(
     return result
 
 
+def _trusted_git_context(
+    repository_root: Path = REPOSITORY_ROOT,
+) -> tuple[str, dict[str, str]]:
+    """Return the fixed Git executable and configuration-free environment."""
+
+    try:
+        git_metadata = TRUSTED_GIT_PATH.lstat()
+    except OSError as exc:
+        raise CustodianReplayError("trusted Git executable is unavailable") from exc
+    if (
+        stat.S_ISLNK(git_metadata.st_mode)
+        or not stat.S_ISREG(git_metadata.st_mode)
+        or stat.S_IMODE(git_metadata.st_mode) & 0o022
+    ):
+        raise CustodianReplayError("trusted Git executable is unsafe")
+    git_environment = {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": "/dev/null",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin",
+    }
+    root = repository_root.resolve()
+    try:
+        common_directory = subprocess.run(
+            [
+                str(TRUSTED_GIT_PATH),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=git_environment,
+        ).stdout.strip()
+        replacement_refs = subprocess.run(
+            [
+                str(TRUSTED_GIT_PATH),
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/replace/",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=git_environment,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CustodianReplayError("cannot inspect the trusted Git object view") from exc
+    common_path = Path(common_directory)
+    try:
+        common_metadata = common_path.lstat()
+    except OSError as exc:
+        raise CustodianReplayError("Git common directory is unavailable") from exc
+    if (
+        not common_path.is_absolute()
+        or stat.S_ISLNK(common_metadata.st_mode)
+        or not stat.S_ISDIR(common_metadata.st_mode)
+    ):
+        raise CustodianReplayError("Git common directory is unsafe")
+    if replacement_refs:
+        raise CustodianReplayError("Git replacement refs are forbidden")
+    if os.path.lexists(common_path / "info/grafts"):
+        raise CustodianReplayError("Git grafts are forbidden")
+    return str(TRUSTED_GIT_PATH), git_environment
+
+
 def scorer_code_identity(
     repository_root: Path = REPOSITORY_ROOT,
+    *,
+    code_commit: str,
 ) -> tuple[str, str]:
-    """Identify the Git base and exact source bytes used by sealed scoring."""
+    """Bind current scorer bytes to one explicit, immutable Git commit."""
 
     root = repository_root.resolve()
-    git_environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith("GIT_")
-    }
+    git_executable, git_environment = _trusted_git_context(root)
+    requested_commit = code_commit
+    if GIT_COMMIT_PATTERN.fullmatch(code_commit) is None:
+        raise CustodianReplayError(
+            "requested scorer_code_commit must be a full Git commit"
+        )
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            [
+                git_executable,
+                "rev-parse",
+                "--verify",
+                f"{requested_commit}^{{commit}}",
+            ],
             cwd=root,
             check=True,
             capture_output=True,
@@ -376,6 +566,8 @@ def scorer_code_identity(
     code_commit = completed.stdout.strip()
     if not GIT_COMMIT_PATTERN.fullmatch(code_commit):
         raise CustodianReplayError("scorer Git commit is not a full commit identity")
+    if code_commit != requested_commit:
+        raise CustodianReplayError("requested scorer_code_commit did not resolve exactly")
 
     inventory: list[dict[str, str]] = []
     for relative_path in SCORER_SOURCE_PATHS:
@@ -386,7 +578,7 @@ def scorer_code_identity(
         )
         try:
             committed = subprocess.run(
-                ["git", "show", f"{code_commit}:{relative_path}"],
+                [git_executable, "show", f"{code_commit}:{relative_path}"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -422,12 +614,12 @@ def _regular_file_bytes(path: Path, maximum_bytes: int, context: str) -> bytes:
     except OSError as exc:
         raise CustodianReplayError(f"cannot read {context}: {exc.strerror}") from exc
     try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
             raise CustodianReplayError(
                 f"{context} must be a regular, non-symlink file"
             )
-        if metadata.st_size > maximum_bytes:
+        if before.st_size > maximum_bytes:
             raise CustodianReplayError(
                 f"{context} exceeds the {maximum_bytes}-byte safety limit"
             )
@@ -442,6 +634,28 @@ def _regular_file_bytes(path: Path, maximum_bytes: int, context: str) -> bytes:
         if len(payload) > maximum_bytes:
             raise CustodianReplayError(
                 f"{context} exceeds the {maximum_bytes}-byte safety limit"
+            )
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise CustodianReplayError(f"{context} changed while it was read")
+        path_after = path.lstat()
+        if (
+            not stat.S_ISREG(path_after.st_mode)
+            or (path_after.st_dev, path_after.st_ino)
+            != (after.st_dev, after.st_ino)
+        ):
+            raise CustodianReplayError(
+                f"{context} path changed while it was read"
             )
         return bytes(payload)
     except OSError as exc:
@@ -481,11 +695,28 @@ def _parse_json_document(
     return value
 
 
-def load_planned_candidate_manifest(path: Path) -> dict[str, Any]:
-    """Load and validate the planned experiment facts used for a candidate lock."""
+def load_planned_candidate_manifest(
+    path: Path,
+    registration_commit: str,
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> RegisteredCandidateManifest:
+    """Load one planned manifest from its exact, reachable registration blob."""
+
+    root = repository_root.resolve()
+    registered_directory = root / "experiments/manifests"
+    supplied = path if path.is_absolute() else root / path
+    if supplied.parent != registered_directory:
+        raise CustodianReplayError(
+            "candidate manifest must use its exact experiments/manifests path"
+        )
+    if registered_directory.resolve() != registered_directory:
+        raise CustodianReplayError(
+            "candidate manifest directory must not contain symlinks"
+        )
 
     payload = _regular_file_bytes(
-        path,
+        supplied,
         MAX_CANDIDATE_MANIFEST_BYTES,
         "candidate manifest",
     )
@@ -502,24 +733,179 @@ def load_planned_candidate_manifest(path: Path) -> dict[str, Any]:
             "candidate manifest must still have decision 'planned' before blind replay"
         )
     expected_name = f"{document['experiment_id']}.json"
-    if path.name != expected_name:
+    if supplied.name != expected_name:
         raise CustodianReplayError(
             f"candidate manifest filename must be {expected_name!r}"
         )
+    repository_path = f"experiments/manifests/{expected_name}"
+    if supplied != root / repository_path:
+        raise CustodianReplayError(
+            "candidate manifest must use its exact experiments/manifests path"
+        )
+
+    registration = _string(
+        registration_commit,
+        "candidate registration commit",
+        maximum_characters=40,
+    )
+    if GIT_COMMIT_PATTERN.fullmatch(registration) is None:
+        raise CustodianReplayError(
+            "candidate registration commit must be a full Git commit"
+        )
+    git_executable, git_environment = _trusted_git_context(root)
+    try:
+        resolved_registration = subprocess.run(
+            [
+                git_executable,
+                "rev-parse",
+                "--verify",
+                f"{registration}^{{commit}}",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=git_environment,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CustodianReplayError(
+            "candidate registration commit does not resolve"
+        ) from exc
+    if resolved_registration != registration:
+        raise CustodianReplayError(
+            "candidate registration commit did not resolve exactly"
+        )
+
+    for ancestor, descendant, message in (
+        (
+            document["code_commit"],
+            registration,
+            "candidate code_commit must be an ancestor of its registration commit",
+        ),
+        (
+            registration,
+            "HEAD",
+            "candidate registration commit must be reachable from checked-out HEAD",
+        ),
+        (
+            registration,
+            "refs/remotes/origin/develop",
+            "candidate registration commit must be reachable from origin/develop; "
+            "fetch the durable branch before replay",
+        ),
+    ):
+        completed = subprocess.run(
+            [git_executable, "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            env=git_environment,
+        )
+        if completed.returncode != 0:
+            raise CustodianReplayError(message)
+
+    blob_spec = f"{registration}:{repository_path}"
+    try:
+        size_text = subprocess.run(
+            [git_executable, "cat-file", "-s", blob_spec],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=git_environment,
+        ).stdout.strip()
+        blob_size = int(size_text)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        raise CustodianReplayError(
+            "candidate manifest is not tracked by its registration commit"
+        ) from exc
+    if blob_size > MAX_CANDIDATE_MANIFEST_BYTES:
+        raise CustodianReplayError(
+            "registered candidate manifest exceeds the safety limit"
+        )
+    try:
+        registered_payload = subprocess.run(
+            [git_executable, "show", blob_spec],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            env=git_environment,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CustodianReplayError(
+            "cannot load the registered candidate manifest blob"
+        ) from exc
+    if len(registered_payload) != blob_size or registered_payload != payload:
+        raise CustodianReplayError(
+            "candidate manifest bytes do not match its registration commit"
+        )
+
     governance_violations = validate_directory(
-        path.parent,
-        repo_root=REPOSITORY_ROOT,
+        registered_directory,
+        roadmap_path=root / ".notes/asr/delivery-roadmap.md",
+        repo_root=root,
+        # The exact candidate blob is proven above. Directory-wide governance
+        # applies to the current checkout so later manifests do not invalidate
+        # an older, still-reachable registration.
+        code_ref="HEAD",
+        git_executable=git_executable,
+        git_environment=git_environment,
     )
     if governance_violations:
         raise CustodianReplayError(governance_violations[0])
     if _regular_file_bytes(
-        path,
+        supplied,
         MAX_CANDIDATE_MANIFEST_BYTES,
         "candidate manifest",
     ) != payload:
         raise CustodianReplayError(
             "candidate manifest changed during governance validation"
         )
+    return RegisteredCandidateManifest(
+        document=document,
+        payload=payload,
+        sha256=sha256_bytes(payload),
+        repository_path=repository_path,
+        registration_commit=registration,
+    )
+
+
+def load_terminal_candidate_manifest(path: Path) -> dict[str, Any]:
+    """Load one canonical, result-bearing private EVAL-01 manifest."""
+
+    payload = _regular_file_bytes(
+        path,
+        MAX_CANDIDATE_MANIFEST_BYTES,
+        "terminal candidate manifest",
+    )
+    document = _parse_json_document(
+        payload,
+        "terminal candidate manifest",
+        require_canonical=True,
+    )
+    violations = validate_manifest(document, str(path))
+    if violations:
+        raise CustodianReplayError(violations[0])
+    if document.get("decision") == "planned":
+        raise CustodianReplayError(
+            "terminal candidate manifest must contain a result"
+        )
+    return document
+
+
+def load_restricted_core_report(path: Path) -> dict[str, Any]:
+    """Load one canonical restricted core before terminal validation."""
+
+    payload = _regular_file_bytes(path, MAX_ARTIFACT_BYTES, "restricted core")
+    document = _parse_json_document(
+        payload,
+        "restricted core",
+        require_canonical=True,
+    )
+    try:
+        validate_core_report(document)
+    except CoreReportValidationError as exc:
+        raise CustodianReplayError(str(exc)) from exc
     return document
 
 
@@ -564,6 +950,47 @@ def candidate_freeze_sha256(candidate: Mapping[str, Any]) -> str:
 
     _validate_candidate_projection(candidate)
     return sha256_bytes(canonical_json_bytes(candidate))
+
+
+def validate_registered_candidate_binding(
+    evidence: Mapping[str, Any],
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> RegisteredCandidateManifest:
+    """Re-prove one lock or receipt's registered candidate against Git."""
+
+    candidate = evidence.get("candidate")
+    if isinstance(candidate, Mapping):
+        experiment_id = candidate.get("experiment_id")
+    else:
+        experiment_id = evidence.get("experiment_id")
+    if not isinstance(experiment_id, str):
+        raise CustodianReplayError(
+            "registered candidate evidence has no experiment_id"
+        )
+    _validate_candidate_registration(evidence, "registered candidate", experiment_id)
+    registered = load_planned_candidate_manifest(
+        Path(evidence["candidate_manifest_path"]),
+        evidence["candidate_registration_commit"],
+        repository_root=repository_root,
+    )
+    if registered.sha256 != evidence["candidate_manifest_sha256"]:
+        raise CustodianReplayError(
+            "registered candidate manifest hash does not match evidence"
+        )
+    if candidate_manifest_freeze_sha256(registered.document) != evidence[
+        "candidate_freeze_sha256"
+    ]:
+        raise CustodianReplayError(
+            "registered candidate facts do not match evidence"
+        )
+    if isinstance(candidate, Mapping) and _candidate_projection(
+        registered.document
+    ) != dict(candidate):
+        raise CustodianReplayError(
+            "registered candidate projection does not match candidate lock"
+        )
+    return registered
 
 
 def _validate_candidate_projection(candidate: Any) -> Mapping[str, Any]:
@@ -676,28 +1103,13 @@ def _validate_candidate_command_adapter(
     candidate: Mapping[str, Any],
     hypothesis_adapter_version: str,
 ) -> None:
-    adapter = _string(
-        hypothesis_adapter_version,
-        "hypothesis_adapter_version",
-    )
+    adapter = _string(hypothesis_adapter_version, "hypothesis_adapter_version")
     if adapter not in HYPOTHESIS_ADAPTER_VERSIONS:
         raise CustodianReplayError("hypothesis_adapter_version is unsupported")
-    argv = candidate["command"]["argv"]
-    adapter_positions = [
-        index
-        for index, argument in enumerate(argv)
-        if argument == "--hypothesis-adapter-version"
-    ]
-    if len(adapter_positions) != 1:
-        raise CustodianReplayError(
-            "candidate command must freeze exactly one "
-            "--hypothesis-adapter-version"
-        )
-    adapter_index = adapter_positions[0]
-    if adapter_index + 1 >= len(argv) or argv[adapter_index + 1] != adapter:
-        raise CustodianReplayError(
-            "candidate command hypothesis adapter does not match requested lock"
-        )
+    try:
+        validate_sealed_candidate_execution(candidate, adapter, REPOSITORY_ROOT)
+    except SealedCandidateContractError as exc:
+        raise CustodianReplayError(str(exc)) from exc
 
 
 def validate_candidate_request(
@@ -846,7 +1258,7 @@ def build_candidate_lock(
     descriptor: CollectionDescriptor,
     collection: ValidatedCollection,
     sealed_input: LoadedArtifact,
-    candidate_manifest: Mapping[str, Any],
+    candidate_manifest: RegisteredCandidateManifest,
     *,
     hypothesis_adapter_version: str,
 ) -> dict[str, Any]:
@@ -872,7 +1284,7 @@ def build_candidate_lock(
 
     candidate = validate_candidate_request(
         descriptor,
-        candidate_manifest,
+        candidate_manifest.document,
         hypothesis_adapter_version=hypothesis_adapter_version,
     )
     if candidate["normalizer_version"] != collection.summary.get(
@@ -918,6 +1330,9 @@ def build_candidate_lock(
         "decode_item_count": len(expected_decode_ids),
         "decode_item_ids_sha256": _decode_item_ids_sha256(projection),
         "source_manifest_decision": "planned",
+        "candidate_registration_commit": candidate_manifest.registration_commit,
+        "candidate_manifest_path": candidate_manifest.repository_path,
+        "candidate_manifest_sha256": candidate_manifest.sha256,
         "candidate": candidate,
         "candidate_freeze_sha256": candidate_freeze_sha256(candidate),
     }
@@ -958,6 +1373,7 @@ def validate_candidate_lock(document: Any) -> None:
         "input_projection_sha256",
         "record_input_sha256",
         "decode_item_ids_sha256",
+        "candidate_manifest_sha256",
         "candidate_freeze_sha256",
     ):
         _sha256(document[field], f"candidate lock.{field}")
@@ -981,6 +1397,11 @@ def validate_candidate_lock(document: Any) -> None:
     candidate = _validate_candidate_projection(document["candidate"])
     if candidate["task_id"] != "EVAL-01":
         raise CustodianReplayError("candidate task_id must be EVAL-01")
+    _validate_candidate_registration(
+        document,
+        "candidate lock",
+        candidate["experiment_id"],
+    )
     if candidate["data_sha256"] != document["data_sha256"]:
         raise CustodianReplayError(
             "candidate data_sha256 does not match candidate lock"
@@ -1154,7 +1575,7 @@ def _validate_prediction_items(
     return normalized
 
 
-def load_prediction_items_jsonl(path: Path) -> list[dict[str, Any]]:
+def load_prediction_items_jsonl_artifact(path: Path) -> LoadedPredictionItems:
     """Load strict, reference-free decoder items before canonical freezing.
 
     Every non-empty line is one JSON object with the exact prediction-item
@@ -1191,7 +1612,17 @@ def load_prediction_items_jsonl(path: Path) -> list[dict[str, Any]]:
         if len(items) > MAX_PREDICTION_ITEMS:
             raise CustodianReplayError("raw prediction JSONL contains too many items")
     _validate_prediction_items(items)
-    return items
+    return LoadedPredictionItems(
+        items=tuple(items),
+        payload=payload,
+        sha256=sha256_bytes(payload),
+    )
+
+
+def load_prediction_items_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning only the parsed prediction items."""
+
+    return list(load_prediction_items_jsonl_artifact(path).items)
 
 
 def _validate_prediction_id_subsequence(
@@ -1224,12 +1655,27 @@ def build_prediction_bundle(
     candidate_lock_sha256: str,
     predictions: Sequence[Mapping[str, Any]],
     *,
+    input_export_receipt_sha256: str,
+    raw_predictions_sha256: str,
+    execution_envelope_sha256: str,
     hypothesis_adapter_version: str,
 ) -> dict[str, Any]:
     """Build the exact reference-free prediction artifact expected by scoring."""
 
     projection = _validate_sealed_input_projection(sealed_input.document)
     lock_digest = _sha256(candidate_lock_sha256, "candidate_lock_sha256")
+    input_export_receipt_digest = _sha256(
+        input_export_receipt_sha256,
+        "input_export_receipt_sha256",
+    )
+    raw_predictions_digest = _sha256(
+        raw_predictions_sha256,
+        "raw_predictions_sha256",
+    )
+    execution_envelope_digest = _sha256(
+        execution_envelope_sha256,
+        "execution_envelope_sha256",
+    )
     adapter = _string(
         hypothesis_adapter_version,
         "hypothesis_adapter_version",
@@ -1260,6 +1706,9 @@ def build_prediction_bundle(
         "split": SEALED_SPLIT,
         "input_projection_sha256": sealed_input.sha256,
         "candidate_lock_sha256": lock_digest,
+        "input_export_receipt_sha256": input_export_receipt_digest,
+        "raw_predictions_sha256": raw_predictions_digest,
+        "execution_envelope_sha256": execution_envelope_digest,
         "hypothesis_adapter_version": adapter,
         "item_count": len(copied_items),
         "items_sha256": items_digest,
@@ -1296,6 +1745,9 @@ def validate_prediction_bundle(document: Any) -> None:
     for field in (
         "input_projection_sha256",
         "candidate_lock_sha256",
+        "input_export_receipt_sha256",
+        "raw_predictions_sha256",
+        "execution_envelope_sha256",
         "items_sha256",
     ):
         _sha256(document[field], f"prediction bundle.{field}")
@@ -1378,6 +1830,180 @@ def validate_prediction_handoff(
         [str(item["id"]) for item in bundle["items"]],
         _decode_item_ids(projection),
     )
+
+
+def _validate_execution_candidate_facts(
+    sealed_input: LoadedArtifact,
+    candidate_lock: LoadedArtifact,
+    execution_envelope: LoadedExecutionEnvelope,
+    *,
+    input_export_receipt_sha256: str,
+) -> None:
+    """Bind runner-owned execution facts to the custodian-owned handoff."""
+
+    validate_decode_handoff(sealed_input, candidate_lock)
+    try:
+        validate_execution_envelope(execution_envelope.document)
+    except ExecutionEnvelopeError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+    envelope = execution_envelope.document
+    lock = candidate_lock.document
+    candidate = lock["candidate"]
+    try:
+        execution_plan = validate_sealed_candidate_execution(
+            candidate,
+            lock["hypothesis_adapter_version"],
+            REPOSITORY_ROOT,
+        )
+    except SealedCandidateContractError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+    if (
+        envelope["measurement"]["warmup_run_count"]
+        != execution_plan.baseline_config.warmup_runs
+    ):
+        raise CustodianReplayError(
+            "execution envelope warmup count does not match candidate command"
+        )
+    projection = sealed_input.document
+    root_facts = {
+        "experiment_id": candidate["experiment_id"],
+        "dataset_id": projection["dataset_id"],
+        "revision": projection["revision"],
+        "split": SEALED_SPLIT,
+    }
+    for field, expected in root_facts.items():
+        if envelope[field] != expected:
+            raise CustodianReplayError(
+                f"execution envelope {field} does not match candidate handoff"
+            )
+    binding_facts = {
+        "input_projection_sha256": sealed_input.sha256,
+        "candidate_lock_sha256": candidate_lock.sha256,
+        "candidate_freeze_sha256": lock["candidate_freeze_sha256"],
+        "decode_item_ids_sha256": lock["decode_item_ids_sha256"],
+        "input_export_receipt_sha256": input_export_receipt_sha256,
+        "hypothesis_adapter_version": lock["hypothesis_adapter_version"],
+    }
+    bindings = envelope["bindings"]
+    for field, expected in binding_facts.items():
+        if bindings[field] != expected:
+            raise CustodianReplayError(
+                f"execution envelope {field} does not match candidate handoff"
+            )
+    expected_items = projection["items"]
+    execution_items = envelope["items"]
+    if len(execution_items) != len(expected_items):
+        raise CustodianReplayError(
+            "execution envelope item count does not match sealed input"
+        )
+    for index, (execution_item, input_item) in enumerate(
+        zip(execution_items, expected_items, strict=True)
+    ):
+        if execution_item["id"] != input_item["id"]:
+            raise CustodianReplayError(
+                f"execution envelope item {index} does not match sealed input order"
+            )
+        if not math.isclose(
+            execution_item["audio_duration_seconds"],
+            input_item["duration_seconds"],
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise CustodianReplayError(
+                f"execution envelope item {index} duration does not match sealed input"
+            )
+    runner = envelope["runner"]
+    expected_runner_facts = {
+        "code_commit": candidate["code_commit"],
+        "effective_config_sha256": candidate["config_sha256"],
+        "command": candidate["command"],
+        "models": candidate["models"],
+        "hardware": candidate["hardware"],
+    }
+    for field, expected in expected_runner_facts.items():
+        if runner[field] != expected:
+            raise CustodianReplayError(
+                f"execution runner {field} does not match candidate lock"
+            )
+
+
+def validate_raw_execution_handoff(
+    sealed_input: LoadedArtifact,
+    candidate_lock: LoadedArtifact,
+    input_export_receipt: LoadedArtifact,
+    raw_predictions: LoadedPredictionItems,
+    execution_envelope: LoadedExecutionEnvelope,
+) -> None:
+    """Validate raw prediction bytes and timing evidence before freezing."""
+
+    validate_input_export_receipt_handoff(
+        sealed_input,
+        candidate_lock,
+        input_export_receipt,
+    )
+    _validate_execution_candidate_facts(
+        sealed_input,
+        candidate_lock,
+        execution_envelope,
+        input_export_receipt_sha256=input_export_receipt.sha256,
+    )
+    try:
+        validate_execution_envelope_for_predictions(
+            execution_envelope.document,
+            raw_predictions.items,
+            raw_predictions_sha256=raw_predictions.sha256,
+        )
+    except ExecutionEnvelopeError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+
+
+def validate_frozen_execution_handoff(
+    sealed_input: LoadedArtifact,
+    candidate_lock: LoadedArtifact,
+    input_export_receipt: LoadedArtifact,
+    predictions: LoadedArtifact,
+    execution_envelope: LoadedExecutionEnvelope,
+) -> None:
+    """Validate the frozen prediction/envelope chain before sealed scoring."""
+
+    validate_input_export_receipt_handoff(
+        sealed_input,
+        candidate_lock,
+        input_export_receipt,
+    )
+    validate_prediction_handoff(sealed_input, candidate_lock, predictions)
+    _validate_execution_candidate_facts(
+        sealed_input,
+        candidate_lock,
+        execution_envelope,
+        input_export_receipt_sha256=input_export_receipt.sha256,
+    )
+    bundle = predictions.document
+    if bundle["input_export_receipt_sha256"] != input_export_receipt.sha256:
+        raise CustodianReplayError(
+            "prediction bundle does not bind the supplied input export receipt"
+        )
+    if bundle["execution_envelope_sha256"] != execution_envelope.sha256:
+        raise CustodianReplayError(
+            "prediction bundle does not bind the supplied execution envelope"
+        )
+    bindings = execution_envelope.document["bindings"]
+    if bundle["raw_predictions_sha256"] != bindings["raw_predictions_sha256"]:
+        raise CustodianReplayError(
+            "prediction bundle raw prediction hash does not match execution envelope"
+        )
+    if bundle["items_sha256"] != bindings["prediction_items_sha256"]:
+        raise CustodianReplayError(
+            "prediction bundle items do not match execution envelope"
+        )
+    try:
+        validate_execution_envelope_for_predictions(
+            execution_envelope.document,
+            bundle["items"],
+            raw_predictions_sha256=bundle["raw_predictions_sha256"],
+        )
+    except ExecutionEnvelopeError as exc:
+        raise CustodianReplayError(str(exc)) from exc
 
 
 def preflight_replay_artifacts(
@@ -1480,6 +2106,75 @@ def _validate_receipt_common(document: Mapping[str, Any], context: str) -> None:
         )
 
 
+def _validate_candidate_registration(
+    document: Mapping[str, Any],
+    context: str,
+    experiment_id: str,
+) -> None:
+    commit = _string(
+        document["candidate_registration_commit"],
+        f"{context}.candidate_registration_commit",
+    )
+    if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
+        raise CustodianReplayError(
+            f"{context}.candidate_registration_commit must be a full Git commit"
+        )
+    manifest_path = _string(
+        document["candidate_manifest_path"],
+        f"{context}.candidate_manifest_path",
+        maximum_characters=4096,
+    )
+    expected_path = f"experiments/manifests/{experiment_id}.json"
+    if manifest_path != expected_path:
+        raise CustodianReplayError(
+            f"{context}.candidate_manifest_path does not match experiment_id"
+        )
+    _sha256(
+        document["candidate_manifest_sha256"],
+        f"{context}.candidate_manifest_sha256",
+    )
+
+
+def _validate_scorer_runtime(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        raise CustodianReplayError("score receipt scorer_runtime must be an object")
+    _strict_fields(value, SCORER_RUNTIME_FIELDS, "score receipt scorer_runtime")
+    if value["python_implementation"] != "cpython":
+        raise CustodianReplayError("score receipt scorer_runtime requires CPython")
+    python_version = _string(
+        value["python_version"],
+        "score receipt scorer_runtime.python_version",
+        maximum_characters=64,
+    )
+    if PYTHON_VERSION_PATTERN.fullmatch(python_version) is None:
+        raise CustodianReplayError("score receipt scorer Python version is invalid")
+    cache_tag = _string(
+        value["python_cache_tag"],
+        "score receipt scorer_runtime.python_cache_tag",
+        maximum_characters=64,
+    )
+    if PYTHON_CACHE_TAG_PATTERN.fullmatch(cache_tag) is None:
+        raise CustodianReplayError("score receipt scorer cache tag is invalid")
+    for field in ("dependency_lock_sha256", "installed_dependencies_sha256"):
+        _sha256(value[field], f"score receipt scorer_runtime.{field}")
+    count = value["installed_dependency_count"]
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or not 1 <= count <= 10_000
+    ):
+        raise CustodianReplayError(
+            "score receipt scorer installed dependency count is invalid"
+        )
+    unicode_version = _string(
+        value["unicode_version"],
+        "score receipt scorer_runtime.unicode_version",
+        maximum_characters=32,
+    )
+    if UNICODE_VERSION_PATTERN.fullmatch(unicode_version) is None:
+        raise CustodianReplayError("score receipt scorer Unicode version is invalid")
+
+
 def validate_custodian_receipt(document: Any) -> None:
     """Validate one restricted, deterministic custodian completion receipt."""
 
@@ -1490,6 +2185,7 @@ def validate_custodian_receipt(document: Any) -> None:
         _strict_fields(document, INPUT_EXPORT_RECEIPT_FIELDS, "input export receipt")
         context = "input export receipt"
         _validate_receipt_common(document, context)
+        _validate_candidate_registration(document, context, document["experiment_id"])
         if document["split"] != SEALED_SPLIT:
             raise CustodianReplayError(f"{context} split must be sealed-blind")
         if _bounded_nonnegative_integer(
@@ -1516,6 +2212,7 @@ def validate_custodian_receipt(document: Any) -> None:
         )
         context = "prediction freeze receipt"
         _validate_receipt_common(document, context)
+        _validate_candidate_registration(document, context, document["experiment_id"])
         if document["split"] != SEALED_SPLIT:
             raise CustodianReplayError(f"{context} split must be sealed-blind")
         expected_count = _bounded_nonnegative_integer(
@@ -1555,8 +2252,20 @@ def validate_custodian_receipt(document: Any) -> None:
             "candidate_freeze_sha256",
             "prediction_artifact_sha256",
             "prediction_items_sha256",
+            "input_export_receipt_sha256",
+            "raw_predictions_sha256",
+            "execution_envelope_sha256",
+            "runner_source_sha256",
         ):
             _sha256(document[field], f"{context}.{field}")
+        runner_code_commit = _string(
+            document["runner_code_commit"],
+            f"{context}.runner_code_commit",
+        )
+        if not GIT_COMMIT_PATTERN.fullmatch(runner_code_commit):
+            raise CustodianReplayError(
+                f"{context}.runner_code_commit must be a full Git commit"
+            )
         return
 
     if kind == CUSTODIAN_SCORE_RECEIPT_KIND:
@@ -1567,6 +2276,7 @@ def validate_custodian_receipt(document: Any) -> None:
         )
         context = "custodian score receipt"
         _validate_receipt_common(document, context)
+        _validate_candidate_registration(document, context, document["experiment_id"])
         scope = document["evaluation_scope"]
         if not isinstance(scope, Mapping):
             raise CustodianReplayError(f"{context}.evaluation_scope must be an object")
@@ -1588,9 +2298,21 @@ def validate_custodian_receipt(document: Any) -> None:
             "candidate_freeze_sha256",
             "prediction_artifact_sha256",
             "prediction_items_sha256",
+            "input_export_receipt_sha256",
+            "prediction_freeze_receipt_sha256",
+            "execution_envelope_sha256",
+            "runner_source_sha256",
             "core_sha256",
         ):
             _sha256(document[field], f"{context}.{field}")
+        runner_code_commit = _string(
+            document["runner_code_commit"],
+            f"{context}.runner_code_commit",
+        )
+        if not GIT_COMMIT_PATTERN.fullmatch(runner_code_commit):
+            raise CustodianReplayError(
+                f"{context}.runner_code_commit must be a full Git commit"
+            )
         scorer_code_commit = _string(
             document["scorer_code_commit"],
             f"{context}.scorer_code_commit",
@@ -1603,6 +2325,7 @@ def validate_custodian_receipt(document: Any) -> None:
             document["scorer_source_sha256"],
             f"{context}.scorer_source_sha256",
         )
+        _validate_scorer_runtime(document["scorer_runtime"])
         if document["record_identity_version"] != RECORD_IDENTITY_VERSION:
             raise CustodianReplayError(
                 f"{context}.record_identity_version is unsupported"
@@ -1660,16 +2383,107 @@ def load_custodian_receipt(path: Path) -> LoadedArtifact:
     return LoadedArtifact(document, payload, sha256_bytes(payload))
 
 
+def validate_input_export_receipt_handoff(
+    sealed_input: LoadedArtifact,
+    candidate_lock: LoadedArtifact,
+    input_export_receipt: LoadedArtifact,
+) -> None:
+    """Require the durable export completion marker for one input/lock pair."""
+
+    validate_decode_handoff(sealed_input, candidate_lock)
+    receipt = input_export_receipt.document
+    validate_custodian_receipt(receipt)
+    if receipt["kind"] != INPUT_EXPORT_RECEIPT_KIND:
+        raise CustodianReplayError(
+            "sealed replay requires an input export receipt"
+        )
+    lock = candidate_lock.document
+    expected = {
+        "experiment_id": lock["candidate"]["experiment_id"],
+        "dataset_id": sealed_input.document["dataset_id"],
+        "revision": sealed_input.document["revision"],
+        "split": SEALED_SPLIT,
+        "decode_item_count": lock["decode_item_count"],
+        "input_projection_sha256": sealed_input.sha256,
+        "candidate_lock_sha256": candidate_lock.sha256,
+        "candidate_freeze_sha256": lock["candidate_freeze_sha256"],
+        "candidate_registration_commit": lock["candidate_registration_commit"],
+        "candidate_manifest_path": lock["candidate_manifest_path"],
+        "candidate_manifest_sha256": lock["candidate_manifest_sha256"],
+    }
+    for field, value in expected.items():
+        if receipt[field] != value:
+            raise CustodianReplayError(
+                f"input export receipt {field} does not match replay artifacts"
+            )
+
+
+def validate_prediction_freeze_receipt_handoff(
+    sealed_input: LoadedArtifact,
+    candidate_lock: LoadedArtifact,
+    input_export_receipt: LoadedArtifact,
+    predictions: LoadedArtifact,
+    execution_envelope: LoadedExecutionEnvelope,
+    prediction_receipt: LoadedArtifact,
+) -> None:
+    """Validate the complete reference-free completion chain before scoring."""
+
+    validate_frozen_execution_handoff(
+        sealed_input,
+        candidate_lock,
+        input_export_receipt,
+        predictions,
+        execution_envelope,
+    )
+    receipt = prediction_receipt.document
+    validate_custodian_receipt(receipt)
+    if receipt["kind"] != PREDICTION_FREEZE_RECEIPT_KIND:
+        raise CustodianReplayError(
+            "sealed scoring requires a prediction freeze receipt"
+        )
+    lock = candidate_lock.document
+    bundle = predictions.document
+    envelope = execution_envelope.document
+    expected_count = lock["decode_item_count"]
+    expected = {
+        "experiment_id": lock["candidate"]["experiment_id"],
+        "dataset_id": sealed_input.document["dataset_id"],
+        "revision": sealed_input.document["revision"],
+        "split": SEALED_SPLIT,
+        "expected_decode_item_count": expected_count,
+        "prediction_item_count": bundle["item_count"],
+        "missing_prediction_count": expected_count - bundle["item_count"],
+        "input_projection_sha256": sealed_input.sha256,
+        "candidate_lock_sha256": candidate_lock.sha256,
+        "candidate_freeze_sha256": lock["candidate_freeze_sha256"],
+        "candidate_registration_commit": lock["candidate_registration_commit"],
+        "candidate_manifest_path": lock["candidate_manifest_path"],
+        "candidate_manifest_sha256": lock["candidate_manifest_sha256"],
+        "hypothesis_adapter_version": bundle["hypothesis_adapter_version"],
+        "prediction_artifact_sha256": predictions.sha256,
+        "prediction_items_sha256": bundle["items_sha256"],
+        "input_export_receipt_sha256": input_export_receipt.sha256,
+        "raw_predictions_sha256": bundle["raw_predictions_sha256"],
+        "execution_envelope_sha256": execution_envelope.sha256,
+        "runner_code_commit": envelope["runner"]["code_commit"],
+        "runner_source_sha256": envelope["runner"]["source_sha256"],
+    }
+    for field, value in expected.items():
+        if receipt[field] != value:
+            raise CustodianReplayError(
+                f"prediction freeze receipt {field} does not match replay artifacts"
+            )
+
+
 def validate_terminal_manifest_for_receipt(
     manifest: Mapping[str, Any],
     receipt: Mapping[str, Any],
     core_report: Mapping[str, Any],
+    execution_envelope: Mapping[str, Any],
+    input_export_receipt: Mapping[str, Any],
+    prediction_freeze_receipt: Mapping[str, Any],
 ) -> None:
-    """Bind terminal accuracy/lineage to restricted scoring evidence.
-
-    Runtime latency, memory, and throughput still require their separately
-    hashed execution envelope; this helper does not establish their origin.
-    """
+    """Bind terminal accuracy, performance, and lineage to sealed evidence."""
 
     violations = validate_manifest(dict(manifest), "terminal candidate manifest")
     if violations:
@@ -1679,6 +2493,61 @@ def validate_terminal_manifest_for_receipt(
     validate_custodian_receipt(receipt)
     if receipt["kind"] != CUSTODIAN_SCORE_RECEIPT_KIND:
         raise CustodianReplayError("terminal candidate requires a score receipt")
+    validate_custodian_receipt(input_export_receipt)
+    if input_export_receipt["kind"] != INPUT_EXPORT_RECEIPT_KIND:
+        raise CustodianReplayError(
+            "terminal candidate requires an input export receipt"
+        )
+    validate_custodian_receipt(prediction_freeze_receipt)
+    if prediction_freeze_receipt["kind"] != PREDICTION_FREEZE_RECEIPT_KIND:
+        raise CustodianReplayError(
+            "terminal candidate requires a prediction freeze receipt"
+        )
+    try:
+        validate_execution_envelope(execution_envelope)
+        execution_payload = canonical_execution_envelope_bytes(execution_envelope)
+    except ExecutionEnvelopeError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+    execution_sha256 = sha256_bytes(execution_payload)
+    input_export_receipt_sha256 = sha256_bytes(
+        canonical_custodian_receipt_bytes(input_export_receipt)
+    )
+    prediction_receipt_sha256 = sha256_bytes(
+        canonical_custodian_receipt_bytes(prediction_freeze_receipt)
+    )
+    if receipt["execution_envelope_sha256"] != execution_sha256:
+        raise CustodianReplayError(
+            "terminal execution envelope does not match score receipt"
+        )
+    if receipt["input_export_receipt_sha256"] != input_export_receipt_sha256:
+        raise CustodianReplayError(
+            "terminal input export receipt does not match score receipt"
+        )
+    if receipt["prediction_freeze_receipt_sha256"] != prediction_receipt_sha256:
+        raise CustodianReplayError(
+            "terminal prediction freeze receipt does not match score receipt"
+        )
+    if prediction_freeze_receipt["execution_envelope_sha256"] != execution_sha256:
+        raise CustodianReplayError(
+            "prediction freeze receipt does not bind the execution envelope"
+        )
+    if (
+        prediction_freeze_receipt["input_export_receipt_sha256"]
+        != input_export_receipt_sha256
+        or execution_envelope["bindings"]["input_export_receipt_sha256"]
+        != input_export_receipt_sha256
+    ):
+        raise CustodianReplayError(
+            "terminal evidence does not bind the input export receipt"
+        )
+    for field in ("runner_code_commit", "runner_source_sha256"):
+        expected = execution_envelope["runner"][
+            "code_commit" if field == "runner_code_commit" else "source_sha256"
+        ]
+        if receipt[field] != expected or prediction_freeze_receipt[field] != expected:
+            raise CustodianReplayError(
+                f"terminal {field} does not match execution evidence"
+            )
     if receipt["experiment_id"] != manifest["experiment_id"]:
         raise CustodianReplayError(
             "terminal manifest experiment_id does not match score receipt"
@@ -1689,6 +2558,109 @@ def validate_terminal_manifest_for_receipt(
         raise CustodianReplayError(
             "terminal manifest candidate facts do not match score receipt"
         )
+    envelope_bindings = execution_envelope["bindings"]
+    envelope_runner = execution_envelope["runner"]
+    envelope_candidate_facts = {
+        "experiment_id": manifest["experiment_id"],
+        "dataset_id": receipt["dataset_id"],
+        "revision": receipt["revision"],
+        "candidate_freeze_sha256": receipt["candidate_freeze_sha256"],
+        "candidate_lock_sha256": receipt["candidate_lock_sha256"],
+        "input_projection_sha256": receipt["input_projection_sha256"],
+        "hypothesis_adapter_version": receipt["hypothesis_adapter_version"],
+    }
+    for field in ("experiment_id", "dataset_id", "revision"):
+        if execution_envelope[field] != envelope_candidate_facts[field]:
+            raise CustodianReplayError(
+                f"terminal execution {field} does not match score receipt"
+            )
+    for field in (
+        "candidate_freeze_sha256",
+        "candidate_lock_sha256",
+        "input_projection_sha256",
+        "hypothesis_adapter_version",
+    ):
+        if envelope_bindings[field] != envelope_candidate_facts[field]:
+            raise CustodianReplayError(
+                f"terminal execution {field} does not match score receipt"
+            )
+    input_export_score_facts = (
+        "experiment_id",
+        "dataset_id",
+        "revision",
+        "input_projection_sha256",
+        "candidate_lock_sha256",
+        "candidate_freeze_sha256",
+        *CANDIDATE_REGISTRATION_FIELD_NAMES,
+    )
+    for field in input_export_score_facts:
+        if input_export_receipt[field] != receipt[field]:
+            raise CustodianReplayError(
+                f"terminal input export receipt {field} does not match score receipt"
+            )
+    if (
+        input_export_receipt["split"] != SEALED_SPLIT
+        or input_export_receipt["decode_item_count"]
+        != execution_envelope["measurement"]["counts"]["decode_item_count"]
+    ):
+        raise CustodianReplayError(
+            "terminal input export receipt decode scope does not match execution"
+        )
+    execution_counts = execution_envelope["measurement"]["counts"]
+    freeze_execution_facts = {
+        "expected_decode_item_count": execution_counts["decode_item_count"],
+        "prediction_item_count": execution_counts["prediction_item_count"],
+        "missing_prediction_count": execution_counts["missing_prediction_count"],
+        "prediction_items_sha256": envelope_bindings[
+            "prediction_items_sha256"
+        ],
+        "raw_predictions_sha256": envelope_bindings["raw_predictions_sha256"],
+    }
+    for field, expected in freeze_execution_facts.items():
+        if prediction_freeze_receipt[field] != expected:
+            raise CustodianReplayError(
+                f"terminal prediction freeze receipt {field} does not match execution"
+            )
+    freeze_score_facts = (
+        "experiment_id",
+        "dataset_id",
+        "revision",
+        "input_projection_sha256",
+        "candidate_lock_sha256",
+        "candidate_freeze_sha256",
+        *CANDIDATE_REGISTRATION_FIELD_NAMES,
+        "hypothesis_adapter_version",
+        "prediction_artifact_sha256",
+        "prediction_items_sha256",
+        "input_export_receipt_sha256",
+        "execution_envelope_sha256",
+        "runner_code_commit",
+        "runner_source_sha256",
+    )
+    for field in freeze_score_facts:
+        if prediction_freeze_receipt[field] != receipt[field]:
+            raise CustodianReplayError(
+                f"terminal prediction freeze receipt {field} does not match score receipt"
+            )
+    if envelope_runner["code_commit"] != manifest["code_commit"]:
+        raise CustodianReplayError(
+            "terminal execution runner commit does not match manifest"
+        )
+    if receipt["scorer_code_commit"] != manifest["code_commit"]:
+        raise CustodianReplayError(
+            "terminal scorer commit does not match manifest"
+        )
+    runner_manifest_facts = {
+        "effective_config_sha256": manifest["config_sha256"],
+        "command": manifest["command"],
+        "models": manifest["models"],
+        "hardware": manifest["hardware"],
+    }
+    for field, expected in runner_manifest_facts.items():
+        if envelope_runner[field] != expected:
+            raise CustodianReplayError(
+                f"terminal execution runner {field} does not match manifest"
+            )
 
     expected_data_version = f"{receipt['dataset_id']}-{receipt['revision']}"
     if manifest["task_id"] != "EVAL-01":
@@ -1740,6 +2712,10 @@ def validate_terminal_manifest_for_receipt(
     )
 
     metrics = manifest["metrics"]
+    if set(metrics) != TERMINAL_METRIC_FIELDS:
+        raise CustodianReplayError(
+            "terminal metrics must contain exactly the sealed EVAL-01 fields"
+        )
     cer = core_report["aggregate"]["cer"]
     counts = core_report["counts"]
     if cer["reference_units"] == 0:
@@ -1753,9 +2729,15 @@ def validate_terminal_manifest_for_receipt(
         "reference_units": cer["reference_units"],
         "utterance_count": counts["utterance_count"],
         "failed_count": counts["failed_count"],
+        "excluded_count": counts["excluded_count"],
     }
     for field, expected in exact_metrics.items():
-        if metrics.get(field) != expected:
+        actual = metrics.get(field)
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or actual != expected
+        ):
             raise CustodianReplayError(
                 f"terminal metrics.{field} does not match restricted core"
             )
@@ -1797,11 +2779,73 @@ def validate_terminal_manifest_for_receipt(
             "terminal metrics.mer does not match restricted core"
         )
 
+    measurement = execution_envelope["measurement"]
+    execution_counts = measurement["counts"]
+    if execution_counts["decode_item_count"] != counts["scored_count"]:
+        raise CustodianReplayError(
+            "execution decode count does not match restricted core"
+        )
+    if execution_counts["failed_count"] != counts["failed_count"]:
+        raise CustodianReplayError(
+            "execution failed count does not match restricted core"
+        )
+    required_execution_metrics = {
+        "rtf_p50": measurement["rtf_p50"],
+        "rtf_p95": measurement["rtf_p95"],
+        "peak_rss_mb": peak_rss_mib(measurement["peak_rss_bytes"]),
+        "rtf_attempted_count": execution_counts["total_attempt_count"],
+        "retried_count": execution_counts["retried_item_count"],
+        "model_load_seconds": measurement["model_load_ns"] / 1_000_000_000,
+        "cold_inference_seconds": measurement["cold_inference_ns"]
+        / 1_000_000_000,
+        "cold_start_seconds": measurement["cold_start_ns"] / 1_000_000_000,
+        "warm_wall_seconds": measurement["measured_wall_ns"] / 1_000_000_000,
+        "warm_audio_seconds": measurement["measured_audio_seconds"],
+    }
+    for field, expected in required_execution_metrics.items():
+        actual = metrics.get(field)
+        if isinstance(expected, int):
+            matches = (
+                isinstance(actual, int)
+                and not isinstance(actual, bool)
+                and actual == expected
+            )
+        else:
+            matches = (
+                isinstance(actual, (int, float))
+                and not isinstance(actual, bool)
+                and math.isclose(
+                    float(actual),
+                    float(expected),
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            )
+        if not matches:
+            raise CustodianReplayError(
+                f"terminal metrics.{field} does not match execution envelope"
+            )
+
     receipt_sha256 = sha256_bytes(canonical_custodian_receipt_bytes(receipt))
     required_artifacts = (
         ("other", receipt["input_projection_sha256"], "sealed input projection"),
         ("other", receipt["candidate_lock_sha256"], "candidate lock"),
+        (
+            "other",
+            receipt["input_export_receipt_sha256"],
+            "input export receipt",
+        ),
         ("prediction", receipt["prediction_artifact_sha256"], "prediction bundle"),
+        (
+            "report",
+            receipt["execution_envelope_sha256"],
+            "execution envelope",
+        ),
+        (
+            "other",
+            receipt["prediction_freeze_receipt_sha256"],
+            "prediction freeze receipt",
+        ),
         ("report", receipt["core_sha256"], "restricted core"),
         ("other", receipt_sha256, "score receipt"),
     )
@@ -1829,9 +2873,9 @@ def _safe_output_path(path: Path) -> Path:
     if not resolved_parent.is_dir():
         raise CustodianReplayError("output parent directory does not exist")
     parent_mode = resolved_parent.stat().st_mode & 0o777
-    if parent_mode & 0o077:
+    if parent_mode != 0o700:
         raise CustodianReplayError(
-            "output parent must not grant group or other permissions"
+            "output parent directory mode must be exactly 0700"
         )
     resolved = resolved_parent / absolute.name
     if os.path.lexists(resolved):
@@ -1861,6 +2905,62 @@ def validate_output_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
             "all outputs for one transition must share one private directory"
         )
     return tuple(resolved)
+
+
+def validate_restricted_input_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
+    """Require one exact 0700 directory containing exact 0600 regular inputs."""
+
+    if isinstance(paths, (str, bytes, bytearray)) or not isinstance(
+        paths, Sequence
+    ):
+        raise TypeError("restricted input paths must be an ordered sequence")
+    if not paths:
+        raise CustodianReplayError("at least one restricted input is required")
+    resolved: list[Path] = []
+    for raw_path in paths:
+        if not isinstance(raw_path, Path):
+            raise TypeError("restricted inputs must be pathlib.Path instances")
+        absolute = Path(os.path.abspath(raw_path))
+        parent = absolute.parent
+        if parent.resolve() != parent or not parent.is_dir():
+            raise CustodianReplayError(
+                "restricted input parent must be a non-symlink directory"
+            )
+        try:
+            metadata = absolute.lstat()
+        except OSError as exc:
+            raise CustodianReplayError("restricted input is unavailable") from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise CustodianReplayError("restricted input must be a regular file")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise CustodianReplayError("restricted input mode must be exactly 0600")
+        resolved.append(absolute)
+    parents = {path.parent for path in resolved}
+    if len(parents) != 1:
+        raise CustodianReplayError(
+            "restricted inputs must share one restricted directory"
+        )
+    parent = next(iter(parents))
+    if stat.S_IMODE(parent.stat().st_mode) != 0o700:
+        raise CustodianReplayError(
+            "restricted input parent mode must be exactly 0700"
+        )
+    return tuple(resolved)
+
+
+def validate_restricted_transition_paths(
+    input_paths: Sequence[Path],
+    output_paths: Sequence[Path],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Keep one transition's existing evidence and new outputs in one vault."""
+
+    resolved_inputs = validate_restricted_input_paths(input_paths)
+    resolved_outputs = validate_output_paths(output_paths)
+    if resolved_inputs[0].parent != resolved_outputs[0].parent:
+        raise CustodianReplayError(
+            "restricted inputs and outputs must share one private directory"
+        )
+    return resolved_inputs, resolved_outputs
 
 
 def _fsync_directory(path: Path) -> None:
@@ -1928,18 +3028,22 @@ def write_atomic_outputs(outputs: Sequence[tuple[Path, bytes]]) -> None:
                     "refusing to overwrite an output created during replay"
                 ) from exc
             published.append(target)
-            # Ordered callers place the receipt last.  Persist each preceding
-            # artifact before the completion marker can itself become durable.
+            # Ordered callers place their receipt or runner envelope completion
+            # marker last. Persist each predecessor before that marker can
+            # itself become durable.
             _fsync_directory(target.parent)
         for _, temporary in temporary_paths:
             temporary.unlink()
         _fsync_directory(resolved[0][0].parent)
     except BaseException:
-        for target in published:
+        # Remove the completion marker first. If that removal fails, retain all
+        # predecessor artifacts rather than leave a visible marker that points
+        # at evidence this rollback subsequently deleted.
+        for target in reversed(published):
             try:
                 target.unlink()
             except OSError:
-                pass
+                break
         for _, temporary in temporary_paths:
             try:
                 temporary.unlink()
@@ -1966,6 +3070,7 @@ __all__ = [
     "SCORER_SOURCE_PATHS",
     "CustodianReplayError",
     "LoadedArtifact",
+    "LoadedPredictionItems",
     "build_candidate_lock",
     "build_prediction_bundle",
     "candidate_freeze_projection",
@@ -1978,8 +3083,11 @@ __all__ = [
     "load_custodian_receipt",
     "load_planned_candidate_manifest",
     "load_prediction_items_jsonl",
+    "load_prediction_items_jsonl_artifact",
     "load_prediction_bundle",
+    "load_restricted_core_report",
     "load_sealed_input_projection",
+    "load_terminal_candidate_manifest",
     "parse_sealed_input_projection",
     "preflight_replay_artifacts",
     "scorer_code_identity",
@@ -1987,8 +3095,15 @@ __all__ = [
     "validate_candidate_request",
     "validate_custodian_receipt",
     "validate_decode_handoff",
+    "validate_frozen_execution_handoff",
+    "validate_input_export_receipt_handoff",
+    "validate_prediction_freeze_receipt_handoff",
     "validate_prediction_bundle",
     "validate_prediction_handoff",
+    "validate_raw_execution_handoff",
+    "validate_registered_candidate_binding",
+    "validate_restricted_input_paths",
+    "validate_restricted_transition_paths",
     "validate_output_paths",
     "validate_replay_collection",
     "validate_terminal_manifest_for_receipt",

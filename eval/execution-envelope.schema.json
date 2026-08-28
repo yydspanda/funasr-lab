@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yydspanda/funasr-lab/eval/execution-envelope.schema.json",
+  "title": "funasr-lab sealed offline execution envelope",
+  "description": "Canonical restricted runtime evidence. Semantic hashes, complete prediction status, counts, totals, and percentiles are additionally checked by eval.execution_envelope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "state", "access_class", "mode",
+    "experiment_id", "dataset_id", "revision", "split", "bindings",
+    "runner", "measurement", "items"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "asr-evaluation-execution-envelope"},
+    "state": {"const": "frozen"},
+    "access_class": {"const": "restricted"},
+    "mode": {"const": "offline-single-stream"},
+    "experiment_id": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?$"
+    },
+    "dataset_id": {"$ref": "#/$defs/shortString"},
+    "revision": {"$ref": "#/$defs/shortString"},
+    "split": {"const": "sealed-blind"},
+    "bindings": {"$ref": "#/$defs/bindings"},
+    "runner": {"$ref": "#/$defs/runner"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000000,
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "shortString": {"type": "string", "minLength": 1, "maxLength": 256},
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_projection_sha256", "candidate_lock_sha256",
+        "candidate_freeze_sha256", "decode_item_ids_sha256",
+        "input_export_receipt_sha256",
+        "raw_predictions_sha256", "prediction_items_sha256",
+        "hypothesis_adapter_version"
+      ],
+      "properties": {
+        "input_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "decode_item_ids_sha256": {"$ref": "#/$defs/sha256"},
+        "input_export_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_predictions_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_items_sha256": {"$ref": "#/$defs/sha256"},
+        "hypothesis_adapter_version": {
+          "enum": ["identity-v1", "sensevoice-control-tags-v1"]
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "identifier", "revision", "sha256"],
+      "properties": {
+        "role": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "identifier": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "revision": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["working_directory", "argv", "environment"],
+      "properties": {
+        "working_directory": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "argv": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 1024,
+          "items": {"type": "string", "minLength": 1, "maxLength": 16384}
+        },
+        "environment": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "patternProperties": {
+            "^[A-Za-z_][A-Za-z0-9_]*$": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_id", "os", "cpu_model", "logical_cpu_count", "memory_bytes",
+        "device", "accelerator"
+      ],
+      "properties": {
+        "host_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "os": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "cpu_model": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "logical_cpu_count": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "memory_bytes": {"type": "integer", "minimum": 1, "maximum": 1152921504606846976},
+        "device": {"const": "cpu"},
+        "accelerator": {"const": null}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_implementation", "python_version", "python_cache_tag",
+        "dependency_lock_sha256", "installed_dependencies_sha256",
+        "installed_dependency_count", "unicode_version"
+      ],
+      "properties": {
+        "python_implementation": {"const": "cpython"},
+        "python_version": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 64,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([A-Za-z0-9.+-]*)?$"
+        },
+        "python_cache_tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "installed_dependencies_sha256": {"$ref": "#/$defs/sha256"},
+        "installed_dependency_count": {
+          "type": "integer", "minimum": 1, "maximum": 10000
+        },
+        "unicode_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_commit", "source_sha256", "effective_config_sha256",
+        "models", "command", "hardware", "runtime"
+      ],
+      "properties": {
+        "code_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "effective_config_sha256": {"$ref": "#/$defs/sha256"},
+        "models": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": {"$ref": "#/$defs/model"}
+        },
+        "command": {"$ref": "#/$defs/command"},
+        "hardware": {"$ref": "#/$defs/hardware"},
+        "runtime": {"$ref": "#/$defs/runtime"}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decode_item_count", "prediction_item_count", "missing_prediction_count",
+        "total_attempt_count", "retried_item_count", "ok_count", "empty_count",
+        "failed_count"
+      ],
+      "properties": {
+        "decode_item_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "prediction_item_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "missing_prediction_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "total_attempt_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "retried_item_count": {"const": 0},
+        "ok_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "empty_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "failed_count": {"type": "integer", "minimum": 0, "maximum": 1000000}
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock_version", "rss_version", "rss_scope", "rtf_population",
+        "percentile_method", "started_at_utc", "finished_at_utc",
+        "model_load_ns", "cold_inference_ns",
+        "cold_start_ns", "warmup_run_count", "warmup_wall_ns",
+        "measured_wall_ns", "measured_audio_seconds", "rtf_p50", "rtf_p95",
+        "peak_rss_bytes", "counts"
+      ],
+      "properties": {
+        "clock_version": {"const": "python-perf-counter-ns-v1"},
+        "rss_version": {"const": "linux-rusage-self-maxrss-kib-v1"},
+        "rss_scope": {"const": "fresh-process-rusage-self"},
+        "rtf_population": {"const": "all-measured-attempts"},
+        "percentile_method": {"const": "linear-interpolation-n-minus-one-v1"},
+        "started_at_utc": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{6})?Z$"
+        },
+        "finished_at_utc": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{6})?Z$"
+        },
+        "model_load_ns": {"type": "integer", "minimum": 1},
+        "cold_inference_ns": {"type": "integer", "minimum": 1},
+        "cold_start_ns": {"type": "integer", "minimum": 2},
+        "warmup_run_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "warmup_wall_ns": {"type": "integer", "minimum": 0},
+        "measured_wall_ns": {"type": "integer", "minimum": 1},
+        "measured_audio_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "rtf_p50": {"type": "number", "exclusiveMinimum": 0},
+        "rtf_p95": {"type": "number", "exclusiveMinimum": 0},
+        "peak_rss_bytes": {"type": "integer", "minimum": 1},
+        "counts": {"$ref": "#/$defs/counts"}
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "audio_duration_seconds", "wall_time_ns", "attempt_count",
+        "status", "reason_code"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "audio_duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "wall_time_ns": {"type": "integer", "minimum": 1},
+        "attempt_count": {"const": 1},
+        "status": {"enum": ["ok", "empty", "failed"]},
+        "reason_code": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9_]*$"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "ok"}}, "required": ["status"]},
+          "then": {"properties": {"reason_code": {"const": null}}},
+          "else": {"properties": {"reason_code": {"type": "string"}}}
+        }
+      ]
+    }
+  }
+}

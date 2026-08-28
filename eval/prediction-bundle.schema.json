@@ -15,13 +15,16 @@
     "split",
     "input_projection_sha256",
     "candidate_lock_sha256",
+    "input_export_receipt_sha256",
+    "raw_predictions_sha256",
+    "execution_envelope_sha256",
     "hypothesis_adapter_version",
     "item_count",
     "items_sha256",
     "items"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "kind": {"const": "asr-evaluation-predictions"},
     "state": {"const": "frozen"},
     "access_class": {"const": "restricted"},
@@ -30,6 +33,9 @@
     "split": {"const": "sealed-blind"},
     "input_projection_sha256": {"$ref": "#/$defs/sha256"},
     "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
+    "input_export_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "raw_predictions_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_envelope_sha256": {"$ref": "#/$defs/sha256"},
     "hypothesis_adapter_version": {"$ref": "#/$defs/hypothesisAdapter"},
     "item_count": {
       "type": "integer",

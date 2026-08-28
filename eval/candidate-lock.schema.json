@@ -21,11 +21,14 @@
     "decode_item_count",
     "decode_item_ids_sha256",
     "source_manifest_decision",
+    "candidate_registration_commit",
+    "candidate_manifest_path",
+    "candidate_manifest_sha256",
     "candidate",
     "candidate_freeze_sha256"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "kind": {"const": "asr-evaluation-candidate-lock"},
     "state": {"const": "frozen"},
     "access_class": {"const": "restricted"},
@@ -44,6 +47,9 @@
     },
     "decode_item_ids_sha256": {"$ref": "#/$defs/sha256"},
     "source_manifest_decision": {"const": "planned"},
+    "candidate_registration_commit": {"$ref": "#/$defs/gitCommit"},
+    "candidate_manifest_path": {"$ref": "#/$defs/candidateManifestPath"},
+    "candidate_manifest_sha256": {"$ref": "#/$defs/sha256"},
     "candidate": {"$ref": "#/$defs/candidateFreeze"},
     "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"}
   },
@@ -70,6 +76,12 @@
         "identity-v1",
         "sensevoice-control-tags-v1"
       ]
+    },
+    "candidateManifestPath": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 170,
+      "pattern": "^experiments/manifests/EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?\\.json$"
     },
     "candidateFreeze": {
       "type": "object",
@@ -154,7 +166,8 @@
         "cpu_model",
         "logical_cpu_count",
         "memory_bytes",
-        "device"
+        "device",
+        "accelerator"
       ],
       "properties": {
         "host_id": {"$ref": "#/$defs/shortString"},

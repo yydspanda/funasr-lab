@@ -9,7 +9,7 @@
 - **Current Stage:** `EVAL`
 - **In Progress Task:** `EVAL-01`
 - **Current Objective:** Replace the EVAL schema-only examples with the real microphone/meeting `LAB-SEED-001` descriptor and speaker/session/source/lineage-disjoint smoke, development, and sealed-blind manifests, then run the frozen evaluator through the custodian replay.
-- **Next Gate:** Review consent/access evidence and the dedup report; bind real audio/reference and ordered split hashes; seal blind references; pass cross-split isolation and byte-identical collection/core replay without changing the pinned BASE models.
+- **Next Gate:** Review consent/access evidence and the dedup report; bind real audio/reference and ordered split hashes; seal blind references; pre-register one committed CPU runner command; pass cross-split isolation plus byte-identical collection/core replay with a receipt-bound execution envelope without changing the pinned BASE models.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`
@@ -25,7 +25,8 @@
 | Algorithm tracks | Paraformer offline, Paraformer-Streaming live, SenseVoiceSmall speed control |
 | Fork boundary | Upstream source is read-only by default; every unavoidable core path requires a checked ledger entry and focused tests |
 | Environment | Bootstrap and CI are CPU-first; model downloads and training runs are explicit, separately recorded actions |
-| Evidence | No quality or speed claim is promotable before full commits, every model/config/data hash, structured hardware, complete command, metrics, and report hashes are recorded |
+| Evidence | No quality or speed claim is promotable before full commits, every model/config/data hash, structured hardware, complete command, and report hash are recorded; sealed CPU RTF/RSS additionally requires the runner-owned execution envelope and complete receipt chain |
+| EVAL-01 reality | The controlled CPU replay/evidence path is implemented, but real `LAB-SEED-001` consent/access evidence, dedup report, audio, references, descriptor, split manifests, and candidate are absent; no sealed CER/MER/RTF/RSS, GPU-capacity, service-capacity, or product-readiness result exists |
 | Remote enforcement | Both governance workflows run on push and weekly schedule; `develop` has no branch protection/ruleset, so direct writers can still bypass failed checks |
 
 ## Recent Completion Records

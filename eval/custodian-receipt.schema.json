@@ -27,10 +27,20 @@
     "prediction_input_sha256": {},
     "candidate_lock_sha256": {},
     "candidate_freeze_sha256": {},
+    "candidate_registration_commit": {},
+    "candidate_manifest_path": {},
+    "candidate_manifest_sha256": {},
     "prediction_artifact_sha256": {},
     "prediction_items_sha256": {},
+    "input_export_receipt_sha256": {},
+    "raw_predictions_sha256": {},
+    "prediction_freeze_receipt_sha256": {},
+    "execution_envelope_sha256": {},
+    "runner_code_commit": {},
+    "runner_source_sha256": {},
     "scorer_code_commit": {},
     "scorer_source_sha256": {},
+    "scorer_runtime": {},
     "core_schema_version": {},
     "core_sha256": {},
     "public_release": {}
@@ -64,6 +74,45 @@
       "maxLength": 40,
       "pattern": "^[0-9a-f]{40}$"
     },
+    "candidateManifestPath": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 170,
+      "pattern": "^experiments/manifests/EXP-[0-9]{8}-[0-9]{3}(-[a-z0-9-]+)?\\.json$"
+    },
+    "scorerRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_implementation", "python_version", "python_cache_tag",
+        "dependency_lock_sha256", "installed_dependencies_sha256",
+        "installed_dependency_count", "unicode_version"
+      ],
+      "properties": {
+        "python_implementation": {"const": "cpython"},
+        "python_version": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 64,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([A-Za-z0-9.+-]*)?$"
+        },
+        "python_cache_tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "installed_dependencies_sha256": {"$ref": "#/$defs/sha256"},
+        "installed_dependency_count": {
+          "type": "integer", "minimum": 1, "maximum": 10000
+        },
+        "unicode_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
     "boundedCount": {
       "type": "integer",
       "minimum": 0,
@@ -95,10 +144,13 @@
         "decode_item_count",
         "input_projection_sha256",
         "candidate_lock_sha256",
-        "candidate_freeze_sha256"
+        "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256"
       ],
       "properties": {
-        "schema_version": {"const": 1},
+        "schema_version": {"const": 2},
         "kind": {"const": "asr-evaluation-input-export-receipt"},
         "state": {"const": "complete"},
         "access_class": {"const": "restricted"},
@@ -109,7 +161,10 @@
         "decode_item_count": {"$ref": "#/$defs/positiveBoundedCount"},
         "input_projection_sha256": {"$ref": "#/$defs/sha256"},
         "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
-        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"}
+        "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_registration_commit": {"$ref": "#/$defs/gitCommit"},
+        "candidate_manifest_path": {"$ref": "#/$defs/candidateManifestPath"},
+        "candidate_manifest_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "predictionFreezeReceipt": {
@@ -130,12 +185,20 @@
         "input_projection_sha256",
         "candidate_lock_sha256",
         "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
         "hypothesis_adapter_version",
         "prediction_artifact_sha256",
-        "prediction_items_sha256"
+        "prediction_items_sha256",
+        "input_export_receipt_sha256",
+        "raw_predictions_sha256",
+        "execution_envelope_sha256",
+        "runner_code_commit",
+        "runner_source_sha256"
       ],
       "properties": {
-        "schema_version": {"const": 1},
+        "schema_version": {"const": 2},
         "kind": {"const": "asr-evaluation-prediction-freeze-receipt"},
         "state": {"const": "complete"},
         "access_class": {"const": "restricted"},
@@ -149,9 +212,17 @@
         "input_projection_sha256": {"$ref": "#/$defs/sha256"},
         "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
         "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_registration_commit": {"$ref": "#/$defs/gitCommit"},
+        "candidate_manifest_path": {"$ref": "#/$defs/candidateManifestPath"},
+        "candidate_manifest_sha256": {"$ref": "#/$defs/sha256"},
         "hypothesis_adapter_version": {"$ref": "#/$defs/hypothesisAdapter"},
         "prediction_artifact_sha256": {"$ref": "#/$defs/sha256"},
-        "prediction_items_sha256": {"$ref": "#/$defs/sha256"}
+        "prediction_items_sha256": {"$ref": "#/$defs/sha256"},
+        "input_export_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_predictions_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_envelope_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_code_commit": {"$ref": "#/$defs/gitCommit"},
+        "runner_source_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "custodianScoreReceipt": {
@@ -174,16 +245,25 @@
         "prediction_input_sha256",
         "candidate_lock_sha256",
         "candidate_freeze_sha256",
+        "candidate_registration_commit",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
         "prediction_artifact_sha256",
         "prediction_items_sha256",
+        "input_export_receipt_sha256",
+        "prediction_freeze_receipt_sha256",
+        "execution_envelope_sha256",
+        "runner_code_commit",
+        "runner_source_sha256",
         "scorer_code_commit",
         "scorer_source_sha256",
+        "scorer_runtime",
         "core_schema_version",
         "core_sha256",
         "public_release"
       ],
       "properties": {
-        "schema_version": {"const": 1},
+        "schema_version": {"const": 2},
         "kind": {"const": "asr-evaluation-custodian-score-receipt"},
         "state": {"const": "complete"},
         "access_class": {"const": "restricted"},
@@ -199,10 +279,19 @@
         "prediction_input_sha256": {"$ref": "#/$defs/sha256"},
         "candidate_lock_sha256": {"$ref": "#/$defs/sha256"},
         "candidate_freeze_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_registration_commit": {"$ref": "#/$defs/gitCommit"},
+        "candidate_manifest_path": {"$ref": "#/$defs/candidateManifestPath"},
+        "candidate_manifest_sha256": {"$ref": "#/$defs/sha256"},
         "prediction_artifact_sha256": {"$ref": "#/$defs/sha256"},
         "prediction_items_sha256": {"$ref": "#/$defs/sha256"},
+        "input_export_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_freeze_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_envelope_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_code_commit": {"$ref": "#/$defs/gitCommit"},
+        "runner_source_sha256": {"$ref": "#/$defs/sha256"},
         "scorer_code_commit": {"$ref": "#/$defs/gitCommit"},
         "scorer_source_sha256": {"$ref": "#/$defs/sha256"},
+        "scorer_runtime": {"$ref": "#/$defs/scorerRuntime"},
         "core_schema_version": {"const": 2},
         "core_sha256": {"$ref": "#/$defs/sha256"},
         "public_release": {"$ref": "#/$defs/withheldPublicRelease"}

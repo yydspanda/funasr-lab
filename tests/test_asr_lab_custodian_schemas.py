@@ -7,6 +7,7 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATHS = {
     "candidate": REPOSITORY_ROOT / "eval/candidate-lock.schema.json",
+    "execution": REPOSITORY_ROOT / "eval/execution-envelope.schema.json",
     "predictions": REPOSITORY_ROOT / "eval/prediction-bundle.schema.json",
     "receipts": REPOSITORY_ROOT / "eval/custodian-receipt.schema.json",
 }
@@ -40,6 +41,9 @@ PREDICTION_BUNDLE_FIELDS = {
     "split",
     "input_projection_sha256",
     "candidate_lock_sha256",
+    "input_export_receipt_sha256",
+    "raw_predictions_sha256",
+    "execution_envelope_sha256",
     "hypothesis_adapter_version",
     "item_count",
     "items_sha256",
@@ -69,10 +73,19 @@ SCORE_RECEIPT_FIELDS = {
     "prediction_input_sha256",
     "candidate_lock_sha256",
     "candidate_freeze_sha256",
+    "candidate_registration_commit",
+    "candidate_manifest_path",
+    "candidate_manifest_sha256",
     "prediction_artifact_sha256",
     "prediction_items_sha256",
+    "input_export_receipt_sha256",
+    "prediction_freeze_receipt_sha256",
+    "execution_envelope_sha256",
+    "runner_code_commit",
+    "runner_source_sha256",
     "scorer_code_commit",
     "scorer_source_sha256",
+    "scorer_runtime",
     "core_schema_version",
     "core_sha256",
     "public_release",
@@ -136,11 +149,14 @@ class CustodianArtifactSchemaTests(unittest.TestCase):
             "decode_item_count",
             "decode_item_ids_sha256",
             "source_manifest_decision",
+            "candidate_registration_commit",
+            "candidate_manifest_path",
+            "candidate_manifest_sha256",
             "candidate",
             "candidate_freeze_sha256",
         }
         self.assert_exact_closed_object(schema, expected_lock_fields)
-        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(schema["properties"]["schema_version"]["const"], 2)
         self.assertEqual(
             schema["properties"]["kind"]["const"],
             "asr-evaluation-candidate-lock",
@@ -177,7 +193,7 @@ class CustodianArtifactSchemaTests(unittest.TestCase):
     def test_prediction_bundle_allows_a_bounded_ordered_subsequence_shape(self):
         schema = self.schemas["predictions"]
         self.assert_exact_closed_object(schema, PREDICTION_BUNDLE_FIELDS)
-        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(schema["properties"]["schema_version"]["const"], 2)
         self.assertEqual(
             schema["properties"]["kind"]["const"],
             "asr-evaluation-predictions",
@@ -217,7 +233,7 @@ class CustodianArtifactSchemaTests(unittest.TestCase):
                     branch,
                     set(branch["properties"]),
                 )
-                self.assertEqual(branch["properties"]["schema_version"]["const"], 1)
+                self.assertEqual(branch["properties"]["schema_version"]["const"], 2)
                 self.assertEqual(branch["properties"]["kind"]["const"], kind)
                 self.assertEqual(branch["properties"]["state"]["const"], "complete")
                 self.assertEqual(

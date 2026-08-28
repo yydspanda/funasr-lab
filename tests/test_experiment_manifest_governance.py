@@ -262,6 +262,53 @@ class ExperimentManifestGovernanceTest(unittest.TestCase):
 
             self.assertTrue(any("duplicate JSON object key" in error for error in errors))
 
+    def test_tracked_eval_manifest_cannot_publish_private_terminal_results(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            directory = root / "experiments/manifests"
+            directory.mkdir(parents=True)
+            notes = root / ".notes/asr"
+            notes.mkdir(parents=True)
+            roadmap = notes / "delivery-roadmap.md"
+            roadmap.write_text(
+                "# Roadmap\n\n"
+                f"- **Baseline Commit:** `{'1' * 40}`\n\n"
+                "| ID | Status |\n|---|---|\n| `EVAL-01` | In Progress |\n",
+                encoding="utf-8",
+            )
+            manifest = self.valid_manifest()
+            manifest["experiment_id"] = "EXP-20260828-001-sealed"
+            manifest["task_id"] = "EVAL-01"
+            manifest["decision"] = "accept"
+            path = directory / f"{manifest['experiment_id']}.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            errors = validate_directory(
+                directory,
+                roadmap,
+                repo_root=root,
+                verify_git=False,
+            )
+
+            self.assertTrue(
+                any("tracked EVAL-01 manifests must remain planned" in error for error in errors),
+                errors,
+            )
+
+            manifest["decision"] = "planned"
+            manifest["metrics"] = None
+            manifest["artifacts"] = []
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(
+                validate_directory(
+                    directory,
+                    roadmap,
+                    repo_root=root,
+                    verify_git=False,
+                ),
+                [],
+            )
+
     def test_directory_rejects_task_not_registered_in_roadmap(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

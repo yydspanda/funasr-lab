@@ -75,10 +75,17 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
   projection, decode IDs, adapter, model/config/command facts, and sealed-only
   scoring identity. The strict prediction bundle and lock are revalidated
   before scoring reopens references.
-- Canonical restricted receipts make each artifact transition durable; the
-  score receipt binds candidate lock, predictions, sealed scope, core, and the
-  committed scorer-source identity while public release remains explicitly
-  withheld.
+- A committed reference-free CPU runner verifies actual audio, model, config,
+  command, environment, hardware, and source identities; its integer timing
+  and process-RSS envelope is rebound through prediction freeze, score receipt,
+  and terminal-manifest parity without changing deterministic core bytes.
+- Canonical restricted receipts complete each custodian receipt-bearing
+  transition; the runner publishes raw predictions then its execution envelope,
+  which the later prediction-freeze receipt authenticates. The score receipt
+  binds the input-export receipt, candidate lock, predictions, execution
+  envelope, prediction-freeze receipt, sealed scope, core, and independently
+  verified candidate-commit runner/scorer identities while public release
+  remains explicitly withheld.
 - Deterministic core-report bytes exclude execution-only performance and raw
   exception details while preserving every missing, failed, empty, and frozen
   excluded item.

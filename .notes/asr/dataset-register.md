@@ -79,10 +79,22 @@ restricted. Projection schema version 2 omits predeclared excluded audio from
 the decoder handoff while retaining those records in the restricted reference
 projection and core accounting. A text-free aggregate is not publishable until
 the separate one-candidate authorization and minimum-cell release policy pass.
-The restricted score receipt is the durable completion marker that binds the
-candidate lock, prediction artifact, sealed scoring identity, core hash, and
-committed scorer-source inventory; stdout and an unpaired core do not count as
-replay evidence.
+The input-export receipt binds the sealed audio projection and custodian-owned
+candidate lock before decoding. Candidate-lock schema v2 and every receipt also
+bind the exact registered planned-manifest Git commit, repository path, and blob
+hash; registration ancestry/reachability does not replace the separate CI-pass
+gate. Before those artifacts are published, every included audio path is
+reopened without following root, parent, or leaf symlinks and its hash/WAV
+identity is rechecked. The execution envelope then binds that receipt,
+raw prediction bytes, prediction items, and committed runner identity; the
+prediction-freeze receipt binds the canonical prediction bundle to the same
+input, lock, runner, and envelope. The restricted score receipt is the durable
+completion marker that binds both preceding receipts, the execution envelope,
+prediction artifact, sealed scoring identity, core hash, and committed
+runner/scorer identities and source inventories at the same frozen candidate
+commit, plus the scorer's CPython/Unicode, CPU-lock, and installed-distribution
+identity. Stdout, an unpaired core, or any artifact detached from this receipt
+chain does not count as replay evidence.
 
 ## Initial Coverage Target
 

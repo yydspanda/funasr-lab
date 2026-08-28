@@ -161,6 +161,13 @@ def model_directory_sha256(model_path: Path) -> str:
     for path in files:
         file_digest = sha256_file(path).removeprefix("sha256:")
         relative_path = path.relative_to(model_path).as_posix()
+        if any(
+            ord(character) < 32 or ord(character) == 127
+            for character in relative_path
+        ):
+            raise BaselineExecutionError(
+                "resolved model bundle paths must not contain ASCII control characters"
+            )
         inventory_lines.append(f"{file_digest}  {relative_path}\n")
     return sha256_bytes("".join(inventory_lines).encode("utf-8"))
 
@@ -486,6 +493,19 @@ def _model_kwargs(spec: TrackSpec, config: BaselineConfig) -> dict[str, Any]:
         "hub": spec.hub,
         "device": config.device,
         "ncpu": config.ncpu,
+        "ngpu": 0,
+        "batch_size": 1,
+        "fp16": False,
+        "bf16": False,
+        "trust_remote_code": False,
+        "output_dir": None,
+        "lm_weight": 0.0,
+        "lm_file": None,
+        "token_lists": [],
+        "seg_dicts": [],
+        "vad_model": None,
+        "punc_model": None,
+        "spk_model": None,
         "disable_update": True,
         "disable_pbar": True,
         "check_latest": False,

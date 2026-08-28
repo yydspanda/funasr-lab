@@ -283,6 +283,18 @@ class OfflineBaselineTest(unittest.TestCase):
 
         self.assertEqual(model_directory_sha256(bundle), sha256_bytes(inventory))
 
+    def test_model_directory_hash_rejects_inventory_line_injection(self):
+        bundle = self.repo_root / "ambiguous-model-bundle"
+        bundle.mkdir()
+        second_digest = hashlib.sha256(b"second").hexdigest()
+        injected_name = f"a\n{second_digest}  b"
+        (bundle / injected_name).write_bytes(b"first")
+
+        with self.assertRaisesRegex(
+            BaselineExecutionError, "ASCII control characters"
+        ):
+            model_directory_sha256(bundle)
+
     def test_loads_and_hashes_a_valid_frozen_manifest(self):
         relative, audio_path, duration = self.write_wav("valid.wav")
         record = self.record("utt-valid", relative, audio_path, duration, "测试文本")
@@ -405,8 +417,19 @@ class OfflineBaselineTest(unittest.TestCase):
         self.assertEqual(captured_kwargs["model_revision"], "v2.0.4")
         self.assertFalse(captured_kwargs["check_latest"])
         self.assertEqual(captured_kwargs["seed"], 0)
-        self.assertNotIn("vad_model", captured_kwargs)
-        self.assertNotIn("punc_model", captured_kwargs)
+        self.assertEqual(captured_kwargs["ngpu"], 0)
+        self.assertEqual(captured_kwargs["batch_size"], 1)
+        self.assertFalse(captured_kwargs["fp16"])
+        self.assertFalse(captured_kwargs["bf16"])
+        self.assertFalse(captured_kwargs["trust_remote_code"])
+        self.assertIsNone(captured_kwargs["output_dir"])
+        self.assertEqual(captured_kwargs["lm_weight"], 0.0)
+        self.assertIsNone(captured_kwargs["lm_file"])
+        self.assertEqual(captured_kwargs["token_lists"], [])
+        self.assertEqual(captured_kwargs["seg_dicts"], [])
+        self.assertIsNone(captured_kwargs["vad_model"])
+        self.assertIsNone(captured_kwargs["punc_model"])
+        self.assertIsNone(captured_kwargs["spk_model"])
         self.assertEqual(fake_model.calls, 4)
         self.assertEqual(hashed_paths, [Path("/resolved/mock-paraformer")])
 

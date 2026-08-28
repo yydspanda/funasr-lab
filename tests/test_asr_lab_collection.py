@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -8,6 +10,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 from eval.collection import ALLOWED_SPLITS
 from eval.collection import CollectionValidationError
@@ -25,19 +28,39 @@ from eval.core_report import canonical_core_bytes
 from eval.core_report import core_report_sha256
 from eval.core_report import validate_core_report
 from eval.custodian_replay import build_prediction_bundle
+from eval.custodian_replay import PREDICTION_FREEZE_RECEIPT_KIND
+from eval.custodian_replay import RECEIPT_SCHEMA_VERSION
+from eval.custodian_replay import RegisteredCandidateManifest
+from eval.custodian_replay import CustodianReplayError
 from eval.custodian_replay import canonical_prediction_bundle_bytes
 from eval.custodian_replay import canonical_custodian_receipt_bytes
 from eval.custodian_replay import load_candidate_lock
 from eval.custodian_replay import load_custodian_receipt
 from eval.custodian_replay import load_sealed_input_projection
 from eval.custodian_replay import validate_terminal_manifest_for_receipt
+from eval.execution_envelope import build_execution_envelope
+from eval.execution_envelope import canonical_execution_envelope_bytes
 from eval.normalizers import NORMALIZER_VERSION
+from eval.offline_baseline import BaselineConfig
+from eval.offline_baseline import TRACKS
+from eval.offline_baseline import effective_config
 from eval.record_identity import RECORD_IDENTITY_VERSION
 from eval.record_identity import record_input_sha256
 from eval.scoring import MER_TOKENIZER_VERSION
+from eval.sealed_decoder import SealedDecoderError
+from eval.sealed_decoder import runtime_identity
+from scripts import replay_asr_evaluation as replay_cli
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+VENV_PYTHON = REPOSITORY_ROOT / ".venv/bin/python"
+SEALED_SUBPROCESS_ENVIRONMENT = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/dev/null",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PYTHONHASHSEED": "0",
+}
 
 
 def digest(label: str) -> str:
@@ -384,6 +407,15 @@ class CollectionValidatorTest(unittest.TestCase):
         return path, descriptor, records
 
     def planned_candidate_manifest(self, data_sha256: str) -> dict[str, object]:
+        model_revision = "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692"
+        config = BaselineConfig(
+            track="paraformer",
+            model_revision=model_revision,
+            device="cpu",
+            ncpu=4,
+            warmup_runs=1,
+            seed=0,
+        )
         return {
             "schema_version": 1,
             "experiment_id": "EXP-20260827-001-eval-fixture",
@@ -393,16 +425,29 @@ class CollectionValidatorTest(unittest.TestCase):
                 "sealed-blind prediction artifact without exposing references."
             ),
             "upstream_commit": "eedd4e22d10dc2e81d9c2bb321edb3750253964b",
-            "code_commit": "c1aa9d3ba29ac8e1a1791147a42e9b9920d97843",
+            "code_commit": subprocess.check_output(
+                ["/usr/bin/git", "rev-parse", "HEAD"],
+                cwd=REPOSITORY_ROOT,
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "HOME": "/dev/null",
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+                text=True,
+            ).strip(),
             "models": [
                 {
                     "role": "asr",
-                    "identifier": "iic/fixture-asr-model",
-                    "revision": "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692",
+                    "identifier": TRACKS["paraformer"].model_identifier,
+                    "revision": model_revision,
                     "sha256": digest("fixture-model-inventory"),
                 }
             ],
-            "config_sha256": digest("fixture-effective-config"),
+            "config_sha256": sha256_bytes(
+                canonical_json_bytes(effective_config(config))
+            ),
             "data_sha256": data_sha256,
             "eval_data_version": "LAB-SEED-TEST-v0.1",
             "normalizer_version": NORMALIZER_VERSION,
@@ -420,22 +465,54 @@ class CollectionValidatorTest(unittest.TestCase):
                 "working_directory": ".",
                 "argv": [
                     ".venv/bin/python",
-                    "scripts/replay_asr_evaluation.py",
-                    "freeze-predictions",
+                    "-P",
+                    "-S",
+                    "scripts/run_sealed_asr_candidate.py",
+                    "run",
                     "--input-projection",
-                    "eval/private/fixture.input.json",
+                    str(self.root / "sealed-input.json"),
                     "--candidate-lock",
-                    "eval/private/fixture.lock.json",
-                    "--raw-predictions",
-                    "eval/private/fixture.raw.jsonl",
+                    str(self.root / "candidate-lock.json"),
+                    "--input-receipt",
+                    str(self.root / "export-receipt.json"),
+                    "--audio-root",
+                    str(self.root),
+                    "--track",
+                    "paraformer",
+                    "--model-revision",
+                    "28fe27c56aab3861cf77ae065b2bfc2aa3ab9692",
+                    "--device",
+                    "cpu",
+                    "--ncpu",
+                    "4",
+                    "--warmup-runs",
+                    "1",
+                    "--seed",
+                    "0",
                     "--hypothesis-adapter-version",
                     "identity-v1",
-                    "--output-predictions",
-                    "eval/private/fixture.predictions.json",
-                    "--output-receipt",
-                    "eval/private/fixture.prediction-receipt.json",
+                    "--output-raw-predictions",
+                    str(self.root / "raw-predictions.jsonl"),
+                    "--output-execution-envelope",
+                    str(self.root / "execution-envelope.json"),
                 ],
-                "environment": {"PYTHONHASHSEED": "0"},
+                "environment": {
+                    "OMP_NUM_THREADS": "4",
+                    "MKL_NUM_THREADS": "4",
+                    "OPENBLAS_NUM_THREADS": "4",
+                    "NUMEXPR_NUM_THREADS": "4",
+                    "CRC32C_SW_MODE": "auto",
+                    "HYDRA_FULL_ERROR": "1",
+                    "KMP_DUPLICATE_LIB_OK": "True",
+                    "KMP_INIT_AT_FORK": "FALSE",
+                    "MODELSCOPE_CACHE": str(
+                        REPOSITORY_ROOT / ".cache/modelscope"
+                    ),
+                    "PYTHONHASHSEED": "0",
+                    "TORCHINDUCTOR_CACHE_DIR": str(
+                        REPOSITORY_ROOT / ".cache/torchinductor"
+                    ),
+                },
             },
             "metrics": None,
             "artifacts": [],
@@ -452,6 +529,320 @@ class CollectionValidatorTest(unittest.TestCase):
             encoding="utf-8",
         )
         return path
+
+    def registered_candidate_manifest(
+        self, path: Path
+    ) -> RegisteredCandidateManifest:
+        payload = path.read_bytes()
+        document = json.loads(payload)
+        return RegisteredCandidateManifest(
+            document=document,
+            payload=payload,
+            sha256=sha256_bytes(payload),
+            repository_path=(
+                f"experiments/manifests/{document['experiment_id']}.json"
+            ),
+            registration_commit="d" * 40,
+        )
+
+    def export_input_direct(
+        self,
+        *,
+        descriptor_path: Path,
+        candidate_manifest_path: Path,
+        input_path: Path,
+        lock_path: Path,
+        receipt_path: Path,
+    ) -> dict[str, object]:
+        registered = self.registered_candidate_manifest(candidate_manifest_path)
+        scorer_identity = (
+            str(registered.document["code_commit"]),
+            digest("fixture-scorer-source"),
+        )
+        args = argparse.Namespace(
+            descriptor=descriptor_path,
+            collection_root=self.root,
+            audio_root=self.root,
+            candidate_manifest=candidate_manifest_path,
+            candidate_registration_commit=registered.registration_commit,
+            hypothesis_adapter_version="identity-v1",
+            output_input=input_path,
+            output_candidate_lock=lock_path,
+            output_receipt=receipt_path,
+        )
+        with mock.patch.object(
+            replay_cli,
+            "load_planned_candidate_manifest",
+            return_value=registered,
+        ), mock.patch.object(
+            replay_cli,
+            "_scorer_identity_for_candidate",
+            return_value=scorer_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "scorer_code_identity",
+            return_value=scorer_identity,
+        ):
+            return replay_cli._export_input(args)
+
+    def freeze_predictions_direct(
+        self,
+        *,
+        input_path: Path,
+        lock_path: Path,
+        export_receipt_path: Path,
+        raw_predictions_path: Path,
+        execution_envelope_path: Path,
+        predictions_path: Path,
+        prediction_receipt_path: Path,
+        registered_candidate_validator: mock.Mock | None = None,
+    ) -> dict[str, object]:
+        candidate = load_candidate_lock(lock_path).document["candidate"]
+        envelope = json.loads(execution_envelope_path.read_bytes())
+        scorer_identity = (
+            str(candidate["code_commit"]),
+            digest("fixture-scorer-source"),
+        )
+        runner_identity = (
+            str(envelope["runner"]["code_commit"]),
+            str(envelope["runner"]["source_sha256"]),
+        )
+        args = argparse.Namespace(
+            input_projection=input_path,
+            candidate_lock=lock_path,
+            input_receipt=export_receipt_path,
+            raw_predictions=raw_predictions_path,
+            execution_envelope=execution_envelope_path,
+            hypothesis_adapter_version="identity-v1",
+            output_predictions=predictions_path,
+            output_receipt=prediction_receipt_path,
+        )
+        binding_validator = (
+            registered_candidate_validator
+            if registered_candidate_validator is not None
+            else mock.Mock()
+        )
+        with mock.patch.object(
+            replay_cli,
+            "validate_registered_candidate_binding",
+            new=binding_validator,
+        ), mock.patch.object(
+            replay_cli,
+            "_scorer_identity_for_candidate",
+            return_value=scorer_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "scorer_code_identity",
+            return_value=scorer_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "_validated_runner_source_identity",
+            return_value=runner_identity,
+        ):
+            return replay_cli._freeze_predictions(args)
+
+    def score_direct(
+        self,
+        *,
+        descriptor_path: Path,
+        input_path: Path,
+        lock_path: Path,
+        export_receipt_path: Path,
+        predictions_path: Path,
+        execution_envelope_path: Path,
+        prediction_receipt_path: Path,
+        core_path: Path,
+        score_receipt_path: Path,
+        registered_candidate_validator: mock.Mock | None = None,
+    ) -> dict[str, object]:
+        candidate = load_candidate_lock(lock_path).document["candidate"]
+        envelope = json.loads(execution_envelope_path.read_bytes())
+        scorer_identity = (
+            str(candidate["code_commit"]),
+            digest("fixture-scorer-source"),
+        )
+        runner_identity = (
+            str(envelope["runner"]["code_commit"]),
+            str(envelope["runner"]["source_sha256"]),
+        )
+        scorer_runtime = runtime_identity(REPOSITORY_ROOT)
+        args = argparse.Namespace(
+            descriptor=descriptor_path,
+            collection_root=self.root,
+            audio_root=self.root,
+            input_projection=input_path,
+            candidate_lock=lock_path,
+            input_receipt=export_receipt_path,
+            predictions=predictions_path,
+            execution_envelope=execution_envelope_path,
+            prediction_receipt=prediction_receipt_path,
+            output_core=core_path,
+            output_receipt=score_receipt_path,
+        )
+        binding_validator = (
+            registered_candidate_validator
+            if registered_candidate_validator is not None
+            else mock.Mock()
+        )
+        with mock.patch.object(
+            replay_cli,
+            "validate_registered_candidate_binding",
+            new=binding_validator,
+        ), mock.patch.object(
+            replay_cli,
+            "_scorer_identity_for_candidate",
+            return_value=scorer_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "scorer_code_identity",
+            return_value=scorer_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "_validated_runner_source_identity",
+            return_value=runner_identity,
+        ), mock.patch.object(
+            replay_cli,
+            "_scorer_runtime_identity",
+            return_value=scorer_runtime,
+        ):
+            return replay_cli._score(args)
+
+    def write_execution_envelope(
+        self,
+        sealed_input,
+        candidate_lock,
+        prediction_items: list[dict[str, object]],
+        raw_predictions_path: Path,
+        input_export_receipt_path: Path,
+        output_path: Path,
+        *,
+        warmup_runs: int = 1,
+    ) -> dict[str, object]:
+        """Build trusted-runner-shaped evidence for custodian-only fixtures."""
+
+        prediction_by_id = {item["id"]: item for item in prediction_items}
+        attempts = []
+        for index, item in enumerate(sealed_input.document["items"]):
+            prediction = prediction_by_id.get(item["id"])
+            status = "failed" if prediction is None else prediction["status"]
+            reason_code = (
+                "missing_prediction"
+                if prediction is None
+                else prediction["reason_code"]
+            )
+            attempts.append(
+                {
+                    "id": item["id"],
+                    "attempt_index": index,
+                    "elapsed_ns": max(
+                        1,
+                        round(float(item["duration_seconds"]) * 100_000_000),
+                    ),
+                    "audio_duration_seconds": item["duration_seconds"],
+                    "status": status,
+                    "reason_code": reason_code,
+                }
+            )
+        first = dict(attempts[0])
+        first["attempt_index"] = 0
+        candidate = candidate_lock.document["candidate"]
+        runner_commit = str(candidate["code_commit"])
+        runner_source_sha256 = digest("fixture-runner-source")
+        observation = {
+            "experiment_id": candidate["experiment_id"],
+            "dataset_id": sealed_input.document["dataset_id"],
+            "revision": sealed_input.document["revision"],
+            "split": "sealed-blind",
+            "candidate_freeze_sha256": candidate_lock.document[
+                "candidate_freeze_sha256"
+            ],
+            "candidate_lock_sha256": candidate_lock.sha256,
+            "input_projection_sha256": sealed_input.sha256,
+            "hypothesis_adapter_version": candidate_lock.document[
+                "hypothesis_adapter_version"
+            ],
+            "config_sha256": candidate["config_sha256"],
+            "models": candidate["models"],
+            "command": candidate["command"],
+            "hardware": candidate["hardware"],
+            "runner_code_commit": runner_commit,
+            "runner_source_sha256": runner_source_sha256,
+            "runtime": {
+                "python_implementation": "cpython",
+                "python_version": "3.11.15",
+                "python_cache_tag": "cpython-311",
+                "dependency_lock_sha256": digest("lab-cpu-lock"),
+                "installed_dependencies_sha256": digest(
+                    "installed-dependencies"
+                ),
+                "installed_dependency_count": 71,
+                "unicode_version": "14.0.0",
+            },
+            "raw_predictions_sha256": sha256_file(raw_predictions_path),
+            "prediction_items_sha256": sha256_bytes(
+                canonical_json_bytes(prediction_items)
+            ),
+            "prediction_item_count": len(prediction_items),
+            "started_at_utc": "2026-08-28T00:00:00Z",
+            "finished_at_utc": "2026-08-28T00:00:01Z",
+            "measurement_contract": {
+                "clock_version": "python-perf-counter-ns-v1",
+                "rss_version": "linux-rusage-self-maxrss-kib-v1",
+                "rss_scope": "fresh-process-rusage-self",
+                "rtf_population": "all-measured-attempts",
+                "warmup_runs": warmup_runs,
+            },
+            "model_load_ns": 200_000_000,
+            "cold_attempt": first,
+            "warmup_attempts": [
+                {**first, "attempt_index": index}
+                for index in range(warmup_runs)
+            ],
+            "decode_attempts": attempts,
+            "peak_rss_bytes": 1_048_576,
+        }
+        envelope = build_execution_envelope(
+            observation,
+            prediction_items,
+            input_export_receipt_sha256=sha256_file(input_export_receipt_path),
+        )
+        output_path.write_bytes(canonical_execution_envelope_bytes(envelope))
+        output_path.chmod(0o600)
+        return envelope
+
+    def write_valid_runner_handoff(
+        self,
+        *,
+        input_path: Path,
+        lock_path: Path,
+        export_receipt_path: Path,
+        sealed_record: dict[str, object],
+    ) -> tuple[Path, Path]:
+        sealed_input = load_sealed_input_projection(input_path)
+        candidate_lock = load_candidate_lock(lock_path)
+        prediction_items = [
+            {
+                "id": sealed_record["id"],
+                "raw_text": sealed_record["raw_text"],
+                "status": "ok",
+                "reason_code": None,
+            }
+        ]
+        raw_predictions_path = self.root / "raw-predictions.jsonl"
+        raw_predictions_path.write_bytes(
+            b"".join(canonical_json_bytes(item) for item in prediction_items)
+        )
+        raw_predictions_path.chmod(0o600)
+        execution_envelope_path = self.root / "execution-envelope.json"
+        self.write_execution_envelope(
+            sealed_input,
+            candidate_lock,
+            prediction_items,
+            raw_predictions_path,
+            export_receipt_path,
+            execution_envelope_path,
+        )
+        return raw_predictions_path, execution_envelope_path
 
     def rewrite_bundle(
         self,
@@ -496,6 +887,7 @@ class CollectionValidatorTest(unittest.TestCase):
                 str(self.root),
             ],
             cwd=REPOSITORY_ROOT,
+            env=SEALED_SUBPROCESS_ENVIRONMENT,
             check=False,
             capture_output=True,
         )
@@ -643,44 +1035,25 @@ class CollectionValidatorTest(unittest.TestCase):
         candidate_manifest_path = self.write_planned_candidate_manifest(
             sha256_file(descriptor_path)
         )
-        input_path = self.root / "must-not-export-input.json"
-        lock_path = self.root / "must-not-export-lock.json"
-        receipt_path = self.root / "must-not-export-receipt.json"
+        input_path = self.root / "sealed-input.json"
+        lock_path = self.root / "candidate-lock.json"
+        receipt_path = self.root / "export-receipt.json"
 
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "export-input",
-                "--descriptor",
-                str(descriptor_path),
-                "--collection-root",
-                str(self.root),
-                "--audio-root",
-                str(self.root),
-                "--candidate-manifest",
-                str(candidate_manifest_path),
-                "--hypothesis-adapter-version",
-                "identity-v1",
-                "--output-input",
-                str(input_path),
-                "--output-candidate-lock",
-                str(lock_path),
-                "--output-receipt",
-                str(receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
-        )
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn(b"decode-eligible", completed.stderr)
-        self.assertEqual(completed.stdout, b"")
+        with self.assertRaisesRegex(
+            CustodianReplayError, "decode-eligible"
+        ) as rejected:
+            self.export_input_direct(
+                descriptor_path=descriptor_path,
+                candidate_manifest_path=candidate_manifest_path,
+                input_path=input_path,
+                lock_path=lock_path,
+                receipt_path=receipt_path,
+            )
         self.assertFalse(input_path.exists())
         self.assertFalse(lock_path.exists())
         self.assertFalse(receipt_path.exists())
         self.assertNotIn(
-            str(sealed_record["raw_text"]).encode("utf-8"), completed.stderr
+            str(sealed_record["raw_text"]), str(rejected.exception)
         )
 
     def test_custodian_cli_rejects_aliased_outputs_before_reading_inputs(self) -> None:
@@ -688,13 +1061,17 @@ class CollectionValidatorTest(unittest.TestCase):
         receipt_path = self.root / "receipt.json"
         completed = subprocess.run(
             [
-                sys.executable,
+                str(VENV_PYTHON),
+                "-P",
+                "-S",
                 "scripts/replay_asr_evaluation.py",
                 "export-input",
                 "--descriptor",
                 str(self.root / "missing-descriptor.json"),
                 "--candidate-manifest",
                 str(self.root / "missing-candidate.json"),
+                "--candidate-registration-commit",
+                "d" * 40,
                 "--hypothesis-adapter-version",
                 "identity-v1",
                 "--output-input",
@@ -705,6 +1082,7 @@ class CollectionValidatorTest(unittest.TestCase):
                 str(receipt_path),
             ],
             cwd=REPOSITORY_ROOT,
+            env=SEALED_SUBPROCESS_ENVIRONMENT,
             check=False,
             capture_output=True,
         )
@@ -714,7 +1092,7 @@ class CollectionValidatorTest(unittest.TestCase):
         self.assertFalse(shared_path.exists())
         self.assertFalse(receipt_path.exists())
 
-    def test_custodian_export_and_sealed_score_are_byte_stable(self) -> None:
+    def test_custodian_transitions_publish_completion_receipt_last(self) -> None:
         descriptor_path, _, records = self.write_bundle()
         candidate_manifest_path = self.write_planned_candidate_manifest(
             sha256_file(descriptor_path)
@@ -722,34 +1100,263 @@ class CollectionValidatorTest(unittest.TestCase):
         input_path = self.root / "sealed-input.json"
         lock_path = self.root / "candidate-lock.json"
         export_receipt_path = self.root / "export-receipt.json"
-        exported = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "export-input",
-                "--descriptor",
-                str(descriptor_path),
-                "--collection-root",
-                str(self.root),
-                "--audio-root",
-                str(self.root),
-                "--candidate-manifest",
-                str(candidate_manifest_path),
-                "--hypothesis-adapter-version",
-                "identity-v1",
-                "--output-input",
-                str(input_path),
-                "--output-candidate-lock",
-                str(lock_path),
-                "--output-receipt",
-                str(export_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
+        real_writer = replay_cli.write_atomic_outputs
+
+        with mock.patch.object(
+            replay_cli,
+            "write_atomic_outputs",
+            wraps=real_writer,
+        ) as export_writer:
+            self.export_input_direct(
+                descriptor_path=descriptor_path,
+                candidate_manifest_path=candidate_manifest_path,
+                input_path=input_path,
+                lock_path=lock_path,
+                receipt_path=export_receipt_path,
+            )
+        export_writer.assert_called_once()
+        self.assertEqual(
+            export_writer.call_args.args[0][-1][0],
+            export_receipt_path,
         )
-        self.assertEqual(exported.returncode, 0, exported.stderr.decode())
-        self.assertEqual(exported.stdout, b"")
+
+        raw_predictions_path, execution_envelope_path = (
+            self.write_valid_runner_handoff(
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                sealed_record=records["sealed-blind"][0],
+            )
+        )
+        predictions_path = self.root / "predictions.json"
+        prediction_receipt_path = self.root / "prediction-receipt.json"
+        with mock.patch.object(
+            replay_cli,
+            "write_atomic_outputs",
+            wraps=real_writer,
+        ) as freeze_writer:
+            self.freeze_predictions_direct(
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                raw_predictions_path=raw_predictions_path,
+                execution_envelope_path=execution_envelope_path,
+                predictions_path=predictions_path,
+                prediction_receipt_path=prediction_receipt_path,
+            )
+        freeze_writer.assert_called_once()
+        self.assertEqual(
+            freeze_writer.call_args.args[0][-1][0],
+            prediction_receipt_path,
+        )
+
+        core_path = self.root / "core.json"
+        score_receipt_path = self.root / "score-receipt.json"
+        with mock.patch.object(
+            replay_cli,
+            "write_atomic_outputs",
+            wraps=real_writer,
+        ) as score_writer:
+            self.score_direct(
+                descriptor_path=descriptor_path,
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                predictions_path=predictions_path,
+                execution_envelope_path=execution_envelope_path,
+                prediction_receipt_path=prediction_receipt_path,
+                core_path=core_path,
+                score_receipt_path=score_receipt_path,
+            )
+        score_writer.assert_called_once()
+        self.assertEqual(
+            score_writer.call_args.args[0][-1][0],
+            score_receipt_path,
+        )
+
+    def test_registered_candidate_binding_fails_before_later_replay_effects(
+        self,
+    ) -> None:
+        descriptor_path, _, records = self.write_bundle()
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        input_path = self.root / "sealed-input.json"
+        lock_path = self.root / "candidate-lock.json"
+        export_receipt_path = self.root / "export-receipt.json"
+        self.export_input_direct(
+            descriptor_path=descriptor_path,
+            candidate_manifest_path=candidate_manifest_path,
+            input_path=input_path,
+            lock_path=lock_path,
+            receipt_path=export_receipt_path,
+        )
+        raw_predictions_path, execution_envelope_path = (
+            self.write_valid_runner_handoff(
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                sealed_record=records["sealed-blind"][0],
+            )
+        )
+        predictions_path = self.root / "predictions.json"
+        prediction_receipt_path = self.root / "prediction-receipt.json"
+        self.freeze_predictions_direct(
+            input_path=input_path,
+            lock_path=lock_path,
+            export_receipt_path=export_receipt_path,
+            raw_predictions_path=raw_predictions_path,
+            execution_envelope_path=execution_envelope_path,
+            predictions_path=predictions_path,
+            prediction_receipt_path=prediction_receipt_path,
+        )
+        candidate_lock_document = load_candidate_lock(lock_path).document
+
+        freeze_validator = mock.Mock(
+            side_effect=CustodianReplayError("registered candidate sentinel")
+        )
+        failed_predictions_path = self.root / "must-not-freeze.json"
+        failed_prediction_receipt_path = self.root / "must-not-freeze-receipt.json"
+        with mock.patch.object(
+            replay_cli,
+            "write_atomic_outputs",
+        ) as freeze_writer, mock.patch.object(
+            replay_cli,
+            "load_custodian_receipt",
+        ) as freeze_receipt_loader:
+            with self.assertRaisesRegex(
+                CustodianReplayError,
+                "registered candidate sentinel",
+            ):
+                self.freeze_predictions_direct(
+                    input_path=input_path,
+                    lock_path=lock_path,
+                    export_receipt_path=export_receipt_path,
+                    raw_predictions_path=raw_predictions_path,
+                    execution_envelope_path=execution_envelope_path,
+                    predictions_path=failed_predictions_path,
+                    prediction_receipt_path=failed_prediction_receipt_path,
+                    registered_candidate_validator=freeze_validator,
+                )
+        freeze_validator.assert_called_once_with(candidate_lock_document)
+        freeze_receipt_loader.assert_not_called()
+        freeze_writer.assert_not_called()
+        self.assertFalse(failed_predictions_path.exists())
+        self.assertFalse(failed_prediction_receipt_path.exists())
+
+        score_validator = mock.Mock(
+            side_effect=CustodianReplayError("registered candidate sentinel")
+        )
+        failed_core_path = self.root / "must-not-score.json"
+        failed_score_receipt_path = self.root / "must-not-score-receipt.json"
+        with mock.patch.object(
+            replay_cli,
+            "write_atomic_outputs",
+        ) as score_writer, mock.patch.object(
+            replay_cli,
+            "load_custodian_receipt",
+        ) as score_receipt_loader, mock.patch.object(
+            replay_cli,
+            "load_validated_collection",
+        ) as sealed_collection_loader:
+            with self.assertRaisesRegex(
+                CustodianReplayError,
+                "registered candidate sentinel",
+            ):
+                self.score_direct(
+                    descriptor_path=descriptor_path,
+                    input_path=input_path,
+                    lock_path=lock_path,
+                    export_receipt_path=export_receipt_path,
+                    predictions_path=predictions_path,
+                    execution_envelope_path=execution_envelope_path,
+                    prediction_receipt_path=prediction_receipt_path,
+                    core_path=failed_core_path,
+                    score_receipt_path=failed_score_receipt_path,
+                    registered_candidate_validator=score_validator,
+                )
+        score_validator.assert_called_once_with(candidate_lock_document)
+        score_receipt_loader.assert_not_called()
+        sealed_collection_loader.assert_not_called()
+        score_writer.assert_not_called()
+        self.assertFalse(failed_core_path.exists())
+        self.assertFalse(failed_score_receipt_path.exists())
+
+    def test_custodian_export_rejects_leaf_replacement_after_descriptor_read(
+        self,
+    ) -> None:
+        descriptor_path, _, records = self.write_bundle()
+        sealed_record = records["sealed-blind"][0]
+        audio_path = self.root / str(sealed_record["audio"])
+        original_payload = audio_path.read_bytes()
+        displaced_path = audio_path.with_name("displaced-sealed-audio.wav")
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        outputs = (
+            self.root / "sealed-input.json",
+            self.root / "candidate-lock.json",
+            self.root / "export-receipt.json",
+        )
+        real_audio_loader = replay_cli.load_verified_audio_items
+        real_os_read = os.read
+        leaf_replaced = False
+
+        def replace_leaf_after_read(descriptor: int, count: int) -> bytes:
+            nonlocal leaf_replaced
+            chunk = real_os_read(descriptor, count)
+            if chunk and not leaf_replaced:
+                leaf_replaced = True
+                audio_path.replace(displaced_path)
+                audio_path.write_bytes(original_payload)
+            return chunk
+
+        def racing_audio_loader(*args, **kwargs):
+            with mock.patch.object(
+                os,
+                "read",
+                side_effect=replace_leaf_after_read,
+            ):
+                return real_audio_loader(*args, **kwargs)
+
+        with mock.patch.object(
+            replay_cli,
+            "load_verified_audio_items",
+            side_effect=racing_audio_loader,
+        ):
+            with self.assertRaisesRegex(
+                SealedDecoderError,
+                "path changed while it was verified",
+            ):
+                self.export_input_direct(
+                    descriptor_path=descriptor_path,
+                    candidate_manifest_path=candidate_manifest_path,
+                    input_path=outputs[0],
+                    lock_path=outputs[1],
+                    receipt_path=outputs[2],
+                )
+        self.assertTrue(leaf_replaced)
+        self.assertTrue(all(not path.exists() for path in outputs))
+
+    def test_custodian_export_and_sealed_score_are_byte_stable(self) -> None:
+        self.assertEqual(
+            runtime_identity(REPOSITORY_ROOT)["installed_dependency_count"],
+            71,
+        )
+        descriptor_path, _, records = self.write_bundle()
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        input_path = self.root / "sealed-input.json"
+        lock_path = self.root / "candidate-lock.json"
+        export_receipt_path = self.root / "export-receipt.json"
+        self.export_input_direct(
+            descriptor_path=descriptor_path,
+            candidate_manifest_path=candidate_manifest_path,
+            input_path=input_path,
+            lock_path=lock_path,
+            receipt_path=export_receipt_path,
+        )
         export_receipt = load_custodian_receipt(export_receipt_path).document
         self.assertEqual(export_receipt["split"], "sealed-blind")
         self.assertEqual(export_receipt["decode_item_count"], 1)
@@ -774,32 +1381,49 @@ class CollectionValidatorTest(unittest.TestCase):
         raw_predictions_path.write_bytes(
             b"".join(canonical_json_bytes(item) for item in prediction_items)
         )
+        raw_predictions_path.chmod(0o600)
+        execution_envelope_path = self.root / "execution-envelope.json"
+        execution_envelope = self.write_execution_envelope(
+            sealed_input,
+            candidate_lock,
+            prediction_items,
+            raw_predictions_path,
+            export_receipt_path,
+            execution_envelope_path,
+        )
+        mismatched_envelope_path = self.root / "mismatched-warmup-envelope.json"
+        self.write_execution_envelope(
+            sealed_input,
+            candidate_lock,
+            prediction_items,
+            raw_predictions_path,
+            export_receipt_path,
+            mismatched_envelope_path,
+            warmup_runs=0,
+        )
+        with self.assertRaisesRegex(CustodianReplayError, "warmup count"):
+            self.freeze_predictions_direct(
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                raw_predictions_path=raw_predictions_path,
+                execution_envelope_path=mismatched_envelope_path,
+                predictions_path=self.root / "mismatched-warmup-predictions.json",
+                prediction_receipt_path=(
+                    self.root / "mismatched-warmup-receipt.json"
+                ),
+            )
         predictions_path = self.root / "predictions.json"
         prediction_receipt_path = self.root / "prediction-receipt.json"
-        frozen = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "freeze-predictions",
-                "--input-projection",
-                str(input_path),
-                "--candidate-lock",
-                str(lock_path),
-                "--raw-predictions",
-                str(raw_predictions_path),
-                "--hypothesis-adapter-version",
-                "identity-v1",
-                "--output-predictions",
-                str(predictions_path),
-                "--output-receipt",
-                str(prediction_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
+        self.freeze_predictions_direct(
+            input_path=input_path,
+            lock_path=lock_path,
+            export_receipt_path=export_receipt_path,
+            raw_predictions_path=raw_predictions_path,
+            execution_envelope_path=execution_envelope_path,
+            predictions_path=predictions_path,
+            prediction_receipt_path=prediction_receipt_path,
         )
-        self.assertEqual(frozen.returncode, 0, frozen.stderr.decode())
-        self.assertEqual(frozen.stdout, b"")
         prediction_receipt = load_custodian_receipt(
             prediction_receipt_path
         ).document
@@ -811,34 +1435,17 @@ class CollectionValidatorTest(unittest.TestCase):
         receipts: list[dict[str, object]] = []
         for index, core_path in enumerate(core_paths):
             receipt_path = self.root / f"score-receipt-{index}.json"
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "scripts/replay_asr_evaluation.py",
-                    "score",
-                    "--descriptor",
-                    str(descriptor_path),
-                    "--collection-root",
-                    str(self.root),
-                    "--audio-root",
-                    str(self.root),
-                    "--input-projection",
-                    str(input_path),
-                    "--candidate-lock",
-                    str(lock_path),
-                    "--predictions",
-                    str(predictions_path),
-                    "--output-core",
-                    str(core_path),
-                    "--output-receipt",
-                    str(receipt_path),
-                ],
-                cwd=REPOSITORY_ROOT,
-                check=False,
-                capture_output=True,
+            self.score_direct(
+                descriptor_path=descriptor_path,
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                predictions_path=predictions_path,
+                execution_envelope_path=execution_envelope_path,
+                prediction_receipt_path=prediction_receipt_path,
+                core_path=core_path,
+                score_receipt_path=receipt_path,
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-            self.assertEqual(completed.stdout, b"")
             receipts.append(load_custodian_receipt(receipt_path).document)
             self.assertEqual(core_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
@@ -889,10 +1496,29 @@ class CollectionValidatorTest(unittest.TestCase):
             "reference_units": cer["reference_units"],
             "utterance_count": report["counts"]["utterance_count"],
             "failed_count": report["counts"]["failed_count"],
+            "excluded_count": report["counts"]["excluded_count"],
             "mer": mer["errors"] / mer["reference_units"],
             "rtf_p50": 0.1,
             "rtf_p95": 0.1,
             "peak_rss_mb": 1.0,
+            "rtf_attempted_count": 1,
+            "retried_count": 0,
+            "model_load_seconds": 0.2,
+            "cold_inference_seconds": execution_envelope["measurement"][
+                "cold_inference_ns"
+            ]
+            / 1_000_000_000,
+            "cold_start_seconds": execution_envelope["measurement"][
+                "cold_start_ns"
+            ]
+            / 1_000_000_000,
+            "warm_wall_seconds": execution_envelope["measurement"][
+                "measured_wall_ns"
+            ]
+            / 1_000_000_000,
+            "warm_audio_seconds": execution_envelope["measurement"][
+                "measured_audio_seconds"
+            ],
         }
         terminal["artifacts"] = [
             {
@@ -906,9 +1532,24 @@ class CollectionValidatorTest(unittest.TestCase):
                 "sha256": receipts[0]["candidate_lock_sha256"],
             },
             {
+                "kind": "other",
+                "path": str(export_receipt_path),
+                "sha256": receipts[0]["input_export_receipt_sha256"],
+            },
+            {
                 "kind": "prediction",
                 "path": str(predictions_path),
                 "sha256": receipts[0]["prediction_artifact_sha256"],
+            },
+            {
+                "kind": "report",
+                "path": str(execution_envelope_path),
+                "sha256": receipts[0]["execution_envelope_sha256"],
+            },
+            {
+                "kind": "other",
+                "path": str(prediction_receipt_path),
+                "sha256": receipts[0]["prediction_freeze_receipt_sha256"],
             },
             {
                 "kind": "report",
@@ -923,7 +1564,14 @@ class CollectionValidatorTest(unittest.TestCase):
                 ),
             },
         ]
-        validate_terminal_manifest_for_receipt(terminal, receipts[0], report)
+        validate_terminal_manifest_for_receipt(
+            terminal,
+            receipts[0],
+            report,
+            execution_envelope,
+            export_receipt,
+            prediction_receipt,
+        )
         for receipt_path in (
             export_receipt_path,
             prediction_receipt_path,
@@ -938,34 +1586,30 @@ class CollectionValidatorTest(unittest.TestCase):
 
         missing_raw_path = self.root / "missing-raw-predictions.jsonl"
         missing_raw_path.write_bytes(b"")
+        missing_raw_path.chmod(0o600)
+        missing_execution_envelope_path = (
+            self.root / "missing-execution-envelope.json"
+        )
+        self.write_execution_envelope(
+            sealed_input,
+            candidate_lock,
+            [],
+            missing_raw_path,
+            export_receipt_path,
+            missing_execution_envelope_path,
+        )
         missing_predictions_path = self.root / "missing-predictions.json"
         missing_prediction_receipt_path = (
             self.root / "missing-prediction-receipt.json"
         )
-        frozen_missing = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "freeze-predictions",
-                "--input-projection",
-                str(input_path),
-                "--candidate-lock",
-                str(lock_path),
-                "--raw-predictions",
-                str(missing_raw_path),
-                "--hypothesis-adapter-version",
-                "identity-v1",
-                "--output-predictions",
-                str(missing_predictions_path),
-                "--output-receipt",
-                str(missing_prediction_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
-        )
-        self.assertEqual(
-            frozen_missing.returncode, 0, frozen_missing.stderr.decode()
+        self.freeze_predictions_direct(
+            input_path=input_path,
+            lock_path=lock_path,
+            export_receipt_path=export_receipt_path,
+            raw_predictions_path=missing_raw_path,
+            execution_envelope_path=missing_execution_envelope_path,
+            predictions_path=missing_predictions_path,
+            prediction_receipt_path=missing_prediction_receipt_path,
         )
         missing_prediction_receipt = load_custodian_receipt(
             missing_prediction_receipt_path
@@ -975,39 +1619,72 @@ class CollectionValidatorTest(unittest.TestCase):
 
         missing_core_path = self.root / "missing-core.json"
         missing_score_receipt_path = self.root / "missing-score-receipt.json"
-        scored_missing = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "score",
-                "--descriptor",
-                str(descriptor_path),
-                "--collection-root",
-                str(self.root),
-                "--audio-root",
-                str(self.root),
-                "--input-projection",
-                str(input_path),
-                "--candidate-lock",
-                str(lock_path),
-                "--predictions",
-                str(missing_predictions_path),
-                "--output-core",
-                str(missing_core_path),
-                "--output-receipt",
-                str(missing_score_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
+        self.score_direct(
+            descriptor_path=descriptor_path,
+            input_path=input_path,
+            lock_path=lock_path,
+            export_receipt_path=export_receipt_path,
+            predictions_path=missing_predictions_path,
+            execution_envelope_path=missing_execution_envelope_path,
+            prediction_receipt_path=missing_prediction_receipt_path,
+            core_path=missing_core_path,
+            score_receipt_path=missing_score_receipt_path,
         )
-        self.assertEqual(scored_missing.returncode, 0, scored_missing.stderr.decode())
         missing_report = json.loads(missing_core_path.read_bytes())
         self.assertEqual(missing_report["counts"]["failed_count"], 1)
         self.assertEqual(missing_report["items"][0]["status"], "failed")
         self.assertEqual(
             missing_report["items"][0]["reason_code"], "missing_prediction"
         )
+
+    def test_custodian_export_rejects_symlinked_audio_leaf_without_outputs(self):
+        descriptor_path, _, records = self.write_bundle()
+        sealed_record = records["sealed-blind"][0]
+        audio_path = self.root / str(sealed_record["audio"])
+        target = audio_path.with_name("sealed-leaf-target.wav")
+        audio_path.replace(target)
+        audio_path.symlink_to(target.name)
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        outputs = (
+            self.root / "sealed-input.json",
+            self.root / "candidate-lock.json",
+            self.root / "export-receipt.json",
+        )
+        with self.assertRaisesRegex(SealedDecoderError, "cannot safely open"):
+            self.export_input_direct(
+                descriptor_path=descriptor_path,
+                candidate_manifest_path=candidate_manifest_path,
+                input_path=outputs[0],
+                lock_path=outputs[1],
+                receipt_path=outputs[2],
+            )
+        self.assertTrue(all(not path.exists() for path in outputs))
+
+    def test_custodian_export_rejects_symlinked_audio_parent_without_outputs(self):
+        descriptor_path, _, _ = self.write_bundle()
+        audio_directory = self.root / "audio"
+        target_directory = self.root / "real-audio"
+        audio_directory.replace(target_directory)
+        audio_directory.symlink_to(target_directory.name, target_is_directory=True)
+        candidate_manifest_path = self.write_planned_candidate_manifest(
+            sha256_file(descriptor_path)
+        )
+        outputs = (
+            self.root / "sealed-input.json",
+            self.root / "candidate-lock.json",
+            self.root / "export-receipt.json",
+        )
+        with self.assertRaisesRegex(SealedDecoderError, "cannot safely open"):
+            self.export_input_direct(
+                descriptor_path=descriptor_path,
+                candidate_manifest_path=candidate_manifest_path,
+                input_path=outputs[0],
+                lock_path=outputs[1],
+                receipt_path=outputs[2],
+            )
+        self.assertTrue(all(not path.exists() for path in outputs))
 
     def test_custodian_preflight_rejects_changed_prediction_lock(self) -> None:
         descriptor_path, _, records = self.write_bundle()
@@ -1017,48 +1694,46 @@ class CollectionValidatorTest(unittest.TestCase):
         input_path = self.root / "sealed-input.json"
         lock_path = self.root / "candidate-lock.json"
         export_receipt_path = self.root / "export-receipt.json"
-        exported = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "export-input",
-                "--descriptor",
-                str(descriptor_path),
-                "--collection-root",
-                str(self.root),
-                "--audio-root",
-                str(self.root),
-                "--candidate-manifest",
-                str(candidate_manifest_path),
-                "--hypothesis-adapter-version",
-                "identity-v1",
-                "--output-input",
-                str(input_path),
-                "--output-candidate-lock",
-                str(lock_path),
-                "--output-receipt",
-                str(export_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
+        self.export_input_direct(
+            descriptor_path=descriptor_path,
+            candidate_manifest_path=candidate_manifest_path,
+            input_path=input_path,
+            lock_path=lock_path,
+            receipt_path=export_receipt_path,
         )
-        self.assertEqual(exported.returncode, 0, exported.stderr.decode())
 
         sealed_input = load_sealed_input_projection(input_path)
         candidate_lock = load_candidate_lock(lock_path)
         sealed_record = records["sealed-blind"][0]
+        raw_predictions_path = self.root / "raw-predictions.jsonl"
+        prediction_items = [
+            {
+                "id": sealed_record["id"],
+                "raw_text": sealed_record["raw_text"],
+                "status": "ok",
+                "reason_code": None,
+            }
+        ]
+        raw_predictions_path.write_bytes(
+            b"".join(canonical_json_bytes(item) for item in prediction_items)
+        )
+        raw_predictions_path.chmod(0o600)
+        execution_envelope_path = self.root / "execution-envelope.json"
+        execution_envelope = self.write_execution_envelope(
+            sealed_input,
+            candidate_lock,
+            prediction_items,
+            raw_predictions_path,
+            export_receipt_path,
+            execution_envelope_path,
+        )
         prediction_bundle = build_prediction_bundle(
             sealed_input,
             candidate_lock.sha256,
-            [
-                {
-                    "id": sealed_record["id"],
-                    "raw_text": sealed_record["raw_text"],
-                    "status": "ok",
-                    "reason_code": None,
-                }
-            ],
+            prediction_items,
+            input_export_receipt_sha256=sha256_file(export_receipt_path),
+            raw_predictions_sha256=sha256_file(raw_predictions_path),
+            execution_envelope_sha256=sha256_file(execution_envelope_path),
             hypothesis_adapter_version="identity-v1",
         )
         prediction_bundle["candidate_lock_sha256"] = digest("different-lock")
@@ -1066,40 +1741,72 @@ class CollectionValidatorTest(unittest.TestCase):
         predictions_path.write_bytes(
             canonical_prediction_bundle_bytes(prediction_bundle)
         )
+        predictions_path.chmod(0o600)
+        prediction_receipt_path = self.root / "prediction-receipt.json"
+        prediction_receipt = {
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "kind": PREDICTION_FREEZE_RECEIPT_KIND,
+            "state": "complete",
+            "access_class": "restricted",
+            "experiment_id": candidate_lock.document["candidate"][
+                "experiment_id"
+            ],
+            "dataset_id": sealed_input.document["dataset_id"],
+            "revision": sealed_input.document["revision"],
+            "split": "sealed-blind",
+            "expected_decode_item_count": 1,
+            "prediction_item_count": 1,
+            "missing_prediction_count": 0,
+            "input_projection_sha256": sealed_input.sha256,
+            "candidate_lock_sha256": candidate_lock.sha256,
+            "candidate_freeze_sha256": candidate_lock.document[
+                "candidate_freeze_sha256"
+            ],
+            "candidate_registration_commit": candidate_lock.document[
+                "candidate_registration_commit"
+            ],
+            "candidate_manifest_path": candidate_lock.document[
+                "candidate_manifest_path"
+            ],
+            "candidate_manifest_sha256": candidate_lock.document[
+                "candidate_manifest_sha256"
+            ],
+            "hypothesis_adapter_version": "identity-v1",
+            "prediction_artifact_sha256": sha256_file(predictions_path),
+            "prediction_items_sha256": prediction_bundle["items_sha256"],
+            "input_export_receipt_sha256": sha256_file(export_receipt_path),
+            "raw_predictions_sha256": sha256_file(raw_predictions_path),
+            "execution_envelope_sha256": sha256_file(execution_envelope_path),
+            "runner_code_commit": execution_envelope["runner"]["code_commit"],
+            "runner_source_sha256": execution_envelope["runner"][
+                "source_sha256"
+            ],
+        }
+        prediction_receipt_path.write_bytes(
+            canonical_custodian_receipt_bytes(prediction_receipt)
+        )
+        prediction_receipt_path.chmod(0o600)
         core_path = self.root / "must-not-exist.json"
         score_receipt_path = self.root / "must-not-exist-receipt.json"
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "scripts/replay_asr_evaluation.py",
-                "score",
-                "--descriptor",
-                str(descriptor_path),
-                "--collection-root",
-                str(self.root),
-                "--audio-root",
-                str(self.root),
-                "--input-projection",
-                str(input_path),
-                "--candidate-lock",
-                str(lock_path),
-                "--predictions",
-                str(predictions_path),
-                "--output-core",
-                str(core_path),
-                "--output-receipt",
-                str(score_receipt_path),
-            ],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
-        )
-        self.assertEqual(completed.returncode, 2)
-        self.assertEqual(completed.stdout, b"")
+        with self.assertRaisesRegex(
+            CustodianReplayError,
+            "prediction bundle does not bind the supplied candidate lock",
+        ) as rejected:
+            self.score_direct(
+                descriptor_path=descriptor_path,
+                input_path=input_path,
+                lock_path=lock_path,
+                export_receipt_path=export_receipt_path,
+                predictions_path=predictions_path,
+                execution_envelope_path=execution_envelope_path,
+                prediction_receipt_path=prediction_receipt_path,
+                core_path=core_path,
+                score_receipt_path=score_receipt_path,
+            )
         self.assertFalse(core_path.exists())
         self.assertFalse(score_receipt_path.exists())
-        self.assertNotIn(str(sealed_record["raw_text"]).encode("utf-8"), completed.stderr)
-        self.assertNotIn(str(sealed_record["id"]).encode("utf-8"), completed.stderr)
+        self.assertNotIn(str(sealed_record["raw_text"]), str(rejected.exception))
+        self.assertNotIn(str(sealed_record["id"]), str(rejected.exception))
 
     def test_blind_projection_hashes_are_rebuilt_from_sealed_contract(self) -> None:
         for field in (

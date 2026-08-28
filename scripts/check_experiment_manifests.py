@@ -9,7 +9,7 @@ import math
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -526,26 +526,41 @@ def _read_roadmap_control(
     return task_ids, baseline_commit, errors
 
 
-def _git_commit_exists(repo_root: Path, commit: str) -> bool:
+def _git_commit_exists(
+    repo_root: Path,
+    commit: str,
+    *,
+    git_executable: str = "git",
+    git_environment: Mapping[str, str] | None = None,
+) -> bool:
     completed = subprocess.run(
-        ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
+        [git_executable, "cat-file", "-e", f"{commit}^{{commit}}"],
         cwd=repo_root,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=git_environment,
     )
     return completed.returncode == 0
 
 
-def _git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+def _git_is_ancestor(
+    repo_root: Path,
+    ancestor: str,
+    descendant: str,
+    *,
+    git_executable: str = "git",
+    git_environment: Mapping[str, str] | None = None,
+) -> bool:
     completed = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        [git_executable, "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=repo_root,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=git_environment,
     )
     return completed.returncode == 0
 
@@ -557,13 +572,24 @@ def validate_directory(
     repo_root: Path = REPO_ROOT,
     verify_git: bool = True,
     code_ref: str = DEFAULT_CODE_REF,
+    git_executable: str = "git",
+    git_environment: Mapping[str, str] | None = None,
 ) -> list[str]:
     if not directory.is_dir():
         return [f"{directory}: manifest directory does not exist"]
+    tracked_manifest_directory = (
+        directory.resolve()
+        == (repo_root.resolve() / "experiments/manifests").resolve()
+    )
     task_ids, baseline_commit, errors = _read_roadmap_control(roadmap_path)
     manifest_paths = sorted(directory.glob("*.json"))
     code_ref_exists = True
-    if verify_git and manifest_paths and not _git_commit_exists(repo_root, code_ref):
+    if verify_git and manifest_paths and not _git_commit_exists(
+        repo_root,
+        code_ref,
+        git_executable=git_executable,
+        git_environment=git_environment,
+    ):
         code_ref_exists = False
         errors.append(
             f"{code_ref}: target code ref does not resolve; fetch the target branch "
@@ -581,6 +607,19 @@ def validate_directory(
             continue
         errors.extend(validate_manifest(document, str(path)))
         if isinstance(document, dict):
+            if (
+                tracked_manifest_directory
+                and document.get("task_id") == "EVAL-01"
+                and (
+                    document.get("decision") != "planned"
+                    or document.get("metrics") is not None
+                    or document.get("artifacts") != []
+                )
+            ):
+                errors.append(
+                    f"{path}: tracked EVAL-01 manifests must remain planned with "
+                    "null metrics and no artifacts; result-bearing copies are private"
+                )
             experiment_id = document.get("experiment_id")
             if _non_empty_string(experiment_id) and EXPERIMENT_ID.fullmatch(
                 experiment_id
@@ -609,28 +648,52 @@ def validate_directory(
                 if _non_empty_string(upstream_commit) and GIT_COMMIT.fullmatch(
                     upstream_commit
                 ):
-                    if not _git_commit_exists(repo_root, upstream_commit):
+                    if not _git_commit_exists(
+                        repo_root,
+                        upstream_commit,
+                        git_executable=git_executable,
+                        git_environment=git_environment,
+                    ):
                         errors.append(
                             f"{path}: upstream_commit does not resolve to a Git commit"
                         )
                     elif not _git_is_ancestor(
-                        repo_root, upstream_commit, baseline_commit
+                        repo_root,
+                        upstream_commit,
+                        baseline_commit,
+                        git_executable=git_executable,
+                        git_environment=git_environment,
                     ):
                         errors.append(
                             f"{path}: upstream_commit is not in the accepted upstream "
                             "baseline history"
                         )
                 if _non_empty_string(code_commit) and GIT_COMMIT.fullmatch(code_commit):
-                    if not _git_commit_exists(repo_root, code_commit):
+                    if not _git_commit_exists(
+                        repo_root,
+                        code_commit,
+                        git_executable=git_executable,
+                        git_environment=git_environment,
+                    ):
                         errors.append(
                             f"{path}: code_commit does not resolve to a Git commit"
                         )
-                    elif not _git_is_ancestor(repo_root, code_commit, "HEAD"):
+                    elif not _git_is_ancestor(
+                        repo_root,
+                        code_commit,
+                        "HEAD",
+                        git_executable=git_executable,
+                        git_environment=git_environment,
+                    ):
                         errors.append(
                             f"{path}: code_commit is not an ancestor of the checked-out HEAD"
                         )
                     elif code_ref_exists and not _git_is_ancestor(
-                        repo_root, code_commit, code_ref
+                        repo_root,
+                        code_commit,
+                        code_ref,
+                        git_executable=git_executable,
+                        git_environment=git_environment,
                     ):
                         errors.append(
                             f"{path}: code_commit is not reachable from target code "

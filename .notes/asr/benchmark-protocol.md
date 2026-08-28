@@ -163,31 +163,98 @@ For the initial export, the custodian validates planned-candidate metadata
 before it opens the full collection. It then opens sealed references only
 inside the restricted workflow to validate collection and scoring identity,
 and creates the canonical candidate lock plus reference-free audio projection.
-The decoder receives neither references nor authority to edit that lock. Before
-the score transition reopens sealed references, the custodian validates the
-existing lock and canonical prediction bundle as one complete chain. The lock
-freezes source/model/config/data/seed/command and hypothesis-adapter facts plus
-the sealed input/scoring identities. The prediction bundle binds that lock, the
-exact audio projection, ordered decode IDs, adapter, statuses, reason codes,
-and prediction-item hash. Decoder failures are explicit empty predictions;
-omitted decode IDs remain auditable as `missing_prediction` failures. Extra,
-duplicate, or reordered IDs are invalid. Execution metadata and exception
-detail stay in a separate restricted envelope.
+The export must receive a full candidate-registration commit. It authenticates
+the exact tracked `experiments/manifests/<experiment_id>.json` blob, requires
+`code_commit -> registration -> HEAD` ancestry and registration reachability
+from fetched `origin/develop`, and repeats the registration commit, path, and
+blob SHA-256 in candidate-lock schema v2 and all receipts. This does not attest
+CI success; a passing registration CI run is an additional procedural gate.
+The decoder receives neither references nor authority to edit that lock. The
+committed, reference-free `run_sealed_asr_candidate.py` runner supports only the
+pinned Paraformer and SenseVoice CPU profiles in v1. It rechecks every audio
+hash and WAV identity, the actual model bundle, effective config, argv,
+allowlisted environment, hardware, and runner-source inventory before it
+publishes raw predictions followed by a canonical restricted execution
+envelope. The planned argv uses the exact canonical option order and rejects
+empty, flag-shaped, C0-control, or DEL option values. Its manifest/argv model
+revision is the same full 40-character lowercase snapshot commit; tags and
+aliases are invalid. Before opening the collection, export also reconciles the
+planned handoff paths, audio root, and future runner outputs with this private
+run directory. `perf_counter_ns` owns integer model-load, cold, warmup, and measured
+attempt timing. Each attempt's timer starts only after its mandatory
+O_NOFOLLOW audio read, SHA-256 check, and WAV validation; the model receives
+those same verified in-memory bytes. Fresh-process Linux `RUSAGE_SELF` owns
+peak RSS. Model output cannot supply either measurement. A later GPU or
+hostile-candidate contract requires device synchronization and an external
+process/cgroup supervisor; it cannot reuse the CPU v1 claim.
+
+The CPU profile permits `ncpu` 1..4096, warmups 0..100, and seed `0`. It forces
+FP32, batch size one, exact track-specific model/tokenizer/frontend and internal
+registry components, snapshot-local resources, and no VAD, punctuation,
+speaker, LM, remote code, or secondary output directory. Audio export and every
+decode attempt traverse the root, parents, and leaf through no-follow directory
+descriptors; non-canonical relative paths, symlinks, concurrent replacement,
+hash drift, or WAV-identity drift fail closed.
+
+Every sealed entrypoint uses direct Linux CPython argv with `-P -S`, effective
+`PYTHONHASHSEED=0`, and no other non-empty `PYTHON*` startup variable.
+Repository module/package/symlink shadows and unchecked checkout bytecode are
+rejected. Source identity uses the fixed system Git executable with external
+configuration and replacement objects disabled, and rejects replacement refs
+or grafts.
+
+CPU evidence runs require the exact pinned model bundle to be present and
+verified in the planned cache before the fresh runner process starts. A cache
+miss or any model download is provisioning, not an evidence run; discard its
+outputs and restart from a fresh process after verification succeeds. Reported
+`cold_start` is the timed model-load plus cold-inference windows. Cold inference
+excludes that attempt's preceding audio read/hash/WAV validation. The metric
+also excludes pre-measurement and post-measurement model-integrity
+inventory/hash work, which remains mandatory lineage validation but is not
+latency. Peak RSS is the fresh runner process's Linux `RUSAGE_SELF` high-water
+mark sampled immediately after the measured pass. It covers all in-process
+work from process start through validation, model load, cold/warmup, and
+measured decode. It excludes post-measurement model verification, child
+processes, and later artifact publication, and therefore is not a process-tree
+or serving-capacity claim.
+
+`freeze-predictions` verifies the raw bytes and complete execution envelope
+against the sealed input and candidate lock, then creates prediction bundle
+schema v2 and receipt schema v2. The envelope contains no hypothesis text,
+reference, dedicated per-item audio-path or filename field, CER/MER, or raw
+exception. It retains every decode ID, duration, stable status/reason, and integer wall time; counts, measured
+wall/audio totals, RTF P50/P95, and byte-to-MiB RSS are rebuilt rather than
+accepted as self-reported aggregates. The prediction bundle binds the exact raw
+bytes, envelope, audio projection, ordered decode IDs, adapter, statuses,
+reason codes, and prediction-item hash. Decoder failures are explicit empty
+predictions; omitted decode IDs remain auditable as `missing_prediction`
+failures. Extra, duplicate, or reordered IDs are invalid.
 
 Each artifact transition writes all canonical restricted outputs into one
-private directory with mode `0600`; stdout is not evidence. Earlier artifacts
-are directory-synced before the receipt is published last as the completion
-marker. The score receipt binds the planned candidate freeze, candidate lock,
-exact prediction artifact/items, sealed input and scoped record identity,
-derived scoring input, core hash, committed scorer Git revision, and an exact
-inventory hash of the scoring source. A sealed score refuses source bytes that
-differ from that Git revision. A core without its matching receipt is an
-incomplete replay. Before an accuracy result is accepted, rejected, or marked
-for investigation, the terminal experiment manifest must preserve the same
-candidate facts, bind the input/lock/prediction/core/receipt artifacts, and
-match the core CER/MER components and counts. RTF, RSS, and other performance
-facts remain unverified until their separately hashed execution envelope is
-bound; the accuracy/lineage verifier does not certify their measurement origin.
+private directory with mode `0700`; every output file has mode `0600`, and
+stdout is not evidence. In each custodian receipt-bearing transition, earlier
+artifacts are directory-synced before the receipt is published last. The runner
+publishes raw prediction JSONL first and its execution envelope last; the later
+prediction-freeze receipt authenticates both. Before the score transition
+reopens sealed references, it verifies the input-export receipt, input, lock,
+prediction bundle, execution envelope, and prediction-freeze receipt as one chain. The score
+receipt binds that freeze receipt and envelope,
+the planned candidate freeze, candidate lock, exact prediction artifact/items,
+sealed input and scoped record identity, derived scoring input, core hash,
+committed runner/scorer revisions, and both exact source-inventory hashes. A
+sealed score refuses scorer source bytes that differ from the candidate's
+frozen code commit, independently recomputes the runner inventory from that
+commit, and binds its exact CPython/Unicode, CPU-lock, and installed
+distribution inventory. The runner, freeze, scorer, and terminal validator all
+use that same candidate commit; a later manifest-only commit is permitted only
+when the authenticated source inventories are byte-identical. A core without
+its matching receipt is an incomplete replay. Before a result is
+accepted, rejected, or marked for investigation, the terminal verifier must
+preserve the same candidate facts, bind input/lock/prediction/envelope/core and
+receipts, match core CER/MER components and counts, and match envelope RTF
+P50/P95, all-attempt/retry counts, cold/warm timing, audio duration, and peak
+RSS. Performance is inconclusive without this complete envelope; stdout or
+manifest-only numbers are never evidence.
 
 The offline custodian scorer emits only a restricted core report. A text-free
 aggregate projection is not automatically safe to publish: exact metrics over
@@ -196,7 +263,7 @@ Public release therefore requires a separately frozen one-candidate
 authorization and minimum-cell policy; until that contract is implemented, the
 core summary remains inside the restricted custodian workflow.
 
-Each executed experiment manifest must pass
+Each ordinary executed experiment manifest must pass
 `scripts/check_experiment_manifests.py` and bind:
 
 - full 40-character upstream and downstream Git commits;
@@ -213,8 +280,15 @@ Each executed experiment manifest must pass
 
 Pre-register the same manifest with `decision: planned`, `metrics: null`, and
 no artifacts; every identity, hash, hardware, and command field is already
-concrete. Execution replaces the null with measured metrics and adds hashed
-reports, so reviewers never need to accept fabricated zero results.
+concrete. For an ordinary experiment, execution replaces the null with measured
+metrics and adds hashed reports, so reviewers never need to accept fabricated
+zero results. A sealed replay is the explicit exception while its score receipt
+has `public_release.state: withheld`: its tracked manifest remains unchanged at
+`planned`, while a restricted private terminal copy carries the terminal
+decision, measured metrics, and artifact hashes. That copy must pass the sealed
+terminal chain validator against the input-export, prediction-freeze, and score
+receipts, restricted core, and execution envelope; it is neither committed nor
+released until a separate release policy authorizes it.
 
 Branch names, floating model revisions (`main`, `master`, `latest`, or `HEAD`),
 abbreviated commits, placeholder values, and zero/repeated/empty digests are not
