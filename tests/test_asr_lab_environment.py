@@ -16,6 +16,29 @@ from scripts import asr_lab_doctor as doctor
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+class ProjectGovernanceWorkflowTest(unittest.TestCase):
+    def test_strict_doctor_host_prerequisites_are_provisioned_first(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/asr-project-governance.yml"
+        ).read_text(encoding="utf-8")
+
+        ffmpeg = workflow.index(
+            "sudo apt-get install --yes --no-install-recommends ffmpeg"
+        )
+        upstream = workflow.index(
+            "git remote set-url --push upstream no_push"
+        )
+        upstream_fetch = workflow.index(
+            "https://github.com/modelscope/FunASR.git"
+        )
+        strict_doctor = workflow.index(
+            ".venv/bin/python scripts/asr_lab_doctor.py --strict-base-env"
+        )
+        self.assertLess(ffmpeg, strict_doctor)
+        self.assertLess(upstream_fetch, strict_doctor)
+        self.assertLess(upstream, strict_doctor)
+
+
 class BootstrapDevTest(unittest.TestCase):
     def setUp(self) -> None:
         self._temporary_directory = tempfile.TemporaryDirectory()

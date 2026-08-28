@@ -29,6 +29,19 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Provision host prerequisites and fetch-only upstream
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          ffmpeg -version
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/modelscope/FunASR.git
+          else
+            git remote add upstream https://github.com/modelscope/FunASR.git
+          fi
+          git remote set-url --push upstream no_push
+
       - name: Install pinned uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
