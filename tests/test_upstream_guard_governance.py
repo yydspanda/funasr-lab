@@ -115,6 +115,7 @@ class UpstreamGuardGovernanceTests(unittest.TestCase):
             REPO_ROOT / ".github/workflows/asr-upstream-guard.yml"
         ).read_text(encoding="utf-8")
 
+        self.assertIn("fetch-tags: true", workflow)
         reject_main_pr = workflow.index(
             "github.event_name == 'pull_request' && github.base_ref == 'main'"
         )

@@ -45,6 +45,7 @@ class ProjectGovernanceWorkflowTest(unittest.TestCase):
         makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
         agent_contract = (REPOSITORY_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
+        self.assertIn("fetch-tags: true", workflow)
         self.assertIn(".venv/bin/python -m compileall -q", workflow)
         for surface in ("funasr", "runtime/python"):
             self.assertIn(surface, workflow)
