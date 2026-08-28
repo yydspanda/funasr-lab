@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +116,6 @@ class UpstreamGuardGovernanceTests(unittest.TestCase):
             REPO_ROOT / ".github/workflows/asr-upstream-guard.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("fetch-tags: true", workflow)
         reject_main_pr = workflow.index(
             "github.event_name == 'pull_request' && github.base_ref == 'main'"
         )
@@ -127,6 +127,15 @@ class UpstreamGuardGovernanceTests(unittest.TestCase):
         self.assertIn("github.ref_name != 'main'", workflow)
         self.assertIn("'HEAD' || 'refs/remotes/origin/develop'", workflow)
         self.assertIn('--active-ref "$ASR_ACTIVE_REF"', workflow)
+
+    def test_trusted_upstream_fetch_includes_release_tags(self) -> None:
+        with mock.patch.object(guard, "run_git") as run_git:
+            guard.fetch_tracking_refs(self.repo.root)
+
+        upstream_fetch = run_git.call_args_list[1].args
+        self.assertIn("--force", upstream_fetch)
+        self.assertIn("--tags", upstream_fetch)
+        self.assertNotIn("--no-tags", upstream_fetch)
 
     def test_github_repository_slug_accepts_https_and_scp_ssh(self) -> None:
         self.assertEqual(

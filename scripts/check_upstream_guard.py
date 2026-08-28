@@ -202,8 +202,9 @@ def fetch_tracking_refs(repo: Path) -> None:
     run_git(
         repo,
         "fetch",
+        "--force",
         "--prune",
-        "--no-tags",
+        "--tags",
         "upstream",
         "+refs/heads/main:refs/remotes/upstream/main",
     )

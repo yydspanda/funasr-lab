@@ -45,7 +45,11 @@ class ProjectGovernanceWorkflowTest(unittest.TestCase):
         makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
         agent_contract = (REPOSITORY_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
-        self.assertIn("fetch-tags: true", workflow)
+        upstream_tags = workflow.index("'+refs/tags/*:refs/tags/*'")
+        strict_doctor = workflow.index(
+            ".venv/bin/python scripts/asr_lab_doctor.py --strict-base-env"
+        )
+        self.assertLess(upstream_tags, strict_doctor)
         self.assertIn(".venv/bin/python -m compileall -q", workflow)
         for surface in ("funasr", "runtime/python"):
             self.assertIn(surface, workflow)
