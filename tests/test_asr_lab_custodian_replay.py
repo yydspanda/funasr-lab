@@ -1381,6 +1381,16 @@ class CustodianReplayArtifactTest(unittest.TestCase):
         }
         receipt = self.score_receipt(core)
         if integration_identities is not None:
+            # Keep the executed terminal fixture schema-valid before deriving
+            # its candidate freeze. Artifacts are intentionally outside that
+            # immutable projection and are replaced by the full chain below.
+            terminal["artifacts"] = [
+                {
+                    "kind": "report",
+                    "path": "eval/private/preflight-report.json",
+                    "sha256": digest("preflight-report"),
+                }
+            ]
             receipt["candidate_freeze_sha256"] = candidate_manifest_freeze_sha256(
                 terminal
             )
