@@ -110,6 +110,23 @@ class UpstreamGuardGovernanceTests(unittest.TestCase):
             self.repo.root / guard.DEFAULT_LEDGER,
         )
 
+    def test_workflow_checks_candidate_head_without_weakening_recurring_audit(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github/workflows/asr-upstream-guard.yml"
+        ).read_text(encoding="utf-8")
+
+        reject_main_pr = workflow.index(
+            "github.event_name == 'pull_request' && github.base_ref == 'main'"
+        )
+        measure = workflow.index("- name: Measure drift and enforce fork boundary")
+        self.assertLess(reject_main_pr, measure)
+        self.assertIn("github.event_name == 'pull_request'", workflow)
+        self.assertIn("github.event_name == 'push'", workflow)
+        self.assertIn("github.ref_type == 'branch'", workflow)
+        self.assertIn("github.ref_name != 'main'", workflow)
+        self.assertIn("'HEAD' || 'refs/remotes/origin/develop'", workflow)
+        self.assertIn('--active-ref "$ASR_ACTIVE_REF"', workflow)
+
     def test_github_repository_slug_accepts_https_and_scp_ssh(self) -> None:
         self.assertEqual(
             guard.github_repository_slug("https://github.com/modelscope/FunASR.git"),

@@ -173,11 +173,14 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
     def test_baseline_mismatch_is_rejected(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
-        progress = progress.replace(
-            "eedd4e22d10dc2e81d9c2bb321edb3750253964b",
-            "0000000000000000000000000000000000000000",
-            1,
+        progress, replacements = re.subn(
+            r"^- \*\*Baseline Commit:\*\* `[0-9a-f]{40}`$",
+            "- **Baseline Commit:** `0000000000000000000000000000000000000000`",
+            progress,
+            count=1,
+            flags=re.MULTILINE,
         )
+        self.assertEqual(replacements, 1)
         self._write(governance.PROGRESS_PATH, progress)
 
         errors = self._errors()
@@ -187,12 +190,23 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
 
     def test_full_commit_is_a_valid_immutable_baseline_ref(self) -> None:
-        baseline = "eedd4e22d10dc2e81d9c2bb321edb3750253964b"
+        roadmap = self._read(governance.ROADMAP_PATH)
+        baseline_match = re.search(
+            r"^- \*\*Baseline Commit:\*\* `([0-9a-f]{40})`$",
+            roadmap,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(baseline_match)
+        baseline = baseline_match.group(1)
         for relative_path in (governance.ROADMAP_PATH, governance.PROGRESS_PATH):
-            text = self._read(relative_path).replace(
-                "- **Baseline Ref:** `v1.4.3`",
+            text, replacements = re.subn(
+                r"^- \*\*Baseline Ref:\*\* `[^`]+`$",
                 f"- **Baseline Ref:** `{baseline}`",
+                self._read(relative_path),
+                count=1,
+                flags=re.MULTILINE,
             )
+            self.assertEqual(replacements, 1)
             self._write(relative_path, text)
 
         self.assertEqual([], self._errors())
@@ -237,13 +251,17 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
     def test_completion_record_status_must_match_roadmap(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
-        task_match = re.search(
-            r"^- \*\*In Progress Task:\*\* `([^`]+)`$",
-            progress,
-            flags=re.MULTILINE,
+        roadmap = self._read(governance.ROADMAP_PATH)
+        task_id = next(
+            task
+            for task, status in re.findall(
+                r"^\| `([A-Z]+-[0-9]+|UP-SYNC)` \| "
+                r"(?:\*\*)?([^|*]+?)(?:\*\*)? \|",
+                roadmap,
+                flags=re.MULTILINE,
+            )
+            if task != "UP-SYNC" and status.strip() not in {"Done", "Blocked"}
         )
-        self.assertIsNotNone(task_match)
-        task_id = task_match.group(1)
         record = f"""\
 ### 2026-08-26 — Premature completion
 

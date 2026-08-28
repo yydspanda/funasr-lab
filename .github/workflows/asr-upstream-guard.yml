@@ -39,9 +39,18 @@ jobs:
           fi
           git remote set-url --push upstream no_push
 
+      - name: Reject pull requests into upstream mirror main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        run: |
+          echo "::error::Fork main is an exact upstream mirror; review UP-SYNC on sync/upstream-* and fast-forward main to the accepted upstream commit."
+          exit 1
+
       - name: Measure drift and enforce fork boundary
+        env:
+          ASR_ACTIVE_REF: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name != 'main')) && 'HEAD' || 'refs/remotes/origin/develop' }}
         run: >-
           python scripts/check_upstream_guard.py
+          --active-ref "$ASR_ACTIVE_REF"
           --max-behind 10
           --max-ahead 0
           --run-ledger-tests
