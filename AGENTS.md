@@ -121,7 +121,7 @@ python3 scripts/check_experiment_manifests.py
 python3 scripts/check_upstream_guard.py --no-fetch --run-ledger-tests
 python3 scripts/run_baseline_smoke.py --track paraformer \
   --audio eval/private/smoke.wav --dry-run
-python3 -m compileall asr_lab funasr examples tests eval scripts
+python3 -m compileall asr_lab funasr examples tests eval scripts runtime/python
 ```
 
 Model tests under `tests_models/` may download checkpoints and are integration

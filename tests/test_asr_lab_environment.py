@@ -38,6 +38,19 @@ class ProjectGovernanceWorkflowTest(unittest.TestCase):
         self.assertLess(upstream_fetch, strict_doctor)
         self.assertLess(upstream, strict_doctor)
 
+    def test_static_gate_covers_toolkit_and_runtime_python(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/asr-project-governance.yml"
+        ).read_text(encoding="utf-8")
+        makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
+        agent_contract = (REPOSITORY_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+        self.assertIn(".venv/bin/python -m compileall -q", workflow)
+        for surface in ("funasr", "runtime/python"):
+            self.assertIn(surface, workflow)
+            self.assertIn(surface, makefile)
+            self.assertIn(surface, agent_contract)
+
 
 class BootstrapDevTest(unittest.TestCase):
     def setUp(self) -> None:

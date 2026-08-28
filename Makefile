@@ -24,7 +24,7 @@ smoke-plan:
 		--audio eval/private/smoke.wav --dry-run
 
 static:
-	$(PYTHON) -m compileall -q asr_lab funasr examples tests eval scripts
+	$(PYTHON) -m compileall -q asr_lab funasr examples tests eval scripts runtime/python
 
 test-lab:
 	$(PYTHON) -m unittest discover -s tests -p 'test_asr_lab_*.py'

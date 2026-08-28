@@ -75,15 +75,14 @@ jobs:
 
       - name: Compile governed Python surfaces
         run: >-
-          python -m compileall -q
+          .venv/bin/python -m compileall -q
           asr_lab
+          funasr
+          examples
           scripts
           eval
-          tests/test_asr_lab_normalizer.py
-          tests/test_asr_lab_smoke_entry.py
-          tests/test_asr_progress_governance.py
-          tests/test_experiment_manifest_governance.py
-          tests/test_upstream_guard_governance.py
+          tests
+          runtime/python
 
       - name: Reject whitespace errors
         run: git diff-tree --check -r HEAD
