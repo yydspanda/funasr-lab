@@ -7,9 +7,9 @@
 ## Current Pointer
 
 - **Current Stage:** `EVAL`
-- **In Progress Task:** `UP-SYNC`
-- **Current Objective:** Integrate trusted upstream `main` at `67d6d880841e0c8f3a33e0f98d3bfc2122e34eff`, adopt immutable release baseline `v1.4.5`, and preserve every downstream EVAL commit and evidence identity without rebase or squash.
-- **Next Gate:** Fast-forward mirror `main`, merge upstream into the downstream overlay on `sync/upstream-v1.4.5`, atomically update all accepted-baseline fields and the patch ledger, then pass environment, manifest, source-isolation, and EVAL regression gates before restoring `EVAL-01`.
+- **In Progress Task:** `EVAL-01`
+- **Current Objective:** Replace the EVAL schema-only examples with the real microphone/meeting `LAB-SEED-001` descriptor and speaker/session/source/lineage-disjoint smoke, development, and sealed-blind manifests, then run the frozen evaluator through the custodian replay.
+- **Next Gate:** Review consent/access evidence and the dedup report; bind real audio/reference and ordered split hashes; seal blind references; pre-register one committed CPU runner command; pass cross-split isolation plus byte-identical collection/core replay with a receipt-bound execution envelope without changing the pinned BASE models.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.5`
@@ -30,6 +30,13 @@
 | Remote enforcement | Both governance workflows run on push and weekly schedule; `develop` has no branch protection/ruleset, so direct writers can still bypass failed checks |
 
 ## Recent Completion Records
+
+### 2026-08-28 — FunASR v1.4.5 controlled upstream integration
+
+- **Task:** `UP-SYNC`
+- **Status:** `Done`
+- **Outcome:** Fast-forwarded mirror `main` to trusted upstream `67d6d880841e0c8f3a33e0f98d3bfc2122e34eff`; merged it into the downstream overlay without rebase or squash via `1593c6f00f8fe4a06793921361c636846aabfb83` (parents `1fb4f1948b55cb99ead96a9046651cace5fdfa03` and `67d6d880841e0c8f3a33e0f98d3bfc2122e34eff`); adopted immutable `v1.4.5` / `4df59cc15386ff3bb10916256d807ebc5c85f81d`; preserved prior EVAL head `8a6461d0aa44c7b0722f949c77be60fdd1f228ed` as an ancestor; and retained zero downstream toolkit/runtime core paths with an empty patch ledger.
+- **Verification:** Atomically pushed `67d6d880841e0c8f3a33e0f98d3bfc2122e34eff` to `main` and `ffa49d39cd8a9822c71278d8aedcc0053623925c` to `develop`; a fresh guard measured mirror main `ahead=0/behind=0`, active develop `ahead=21/behind=0`, and accepted baseline `ahead=0/behind=3`; `make PYTHON=.venv/bin/python check` passed 174 lab/EVAL and 65 governance tests, 185 affected upstream no-model tests passed, both content-hashed cached-model compatibility replays matched accepted BASE content evidence without model/data/checkpoint downloads, and integrated runs `33154422861` plus `33154422851` passed.
 
 ### 2026-08-26 — Reproducible CPU offline baselines
 
