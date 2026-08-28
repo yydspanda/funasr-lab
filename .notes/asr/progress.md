@@ -7,9 +7,9 @@
 ## Current Pointer
 
 - **Current Stage:** `EVAL`
-- **In Progress Task:** `EVAL-01`
-- **Current Objective:** Replace the EVAL schema-only examples with the real microphone/meeting `LAB-SEED-001` descriptor and speaker/session/source/lineage-disjoint smoke, development, and sealed-blind manifests, then run the frozen evaluator through the custodian replay.
-- **Next Gate:** Review consent/access evidence and the dedup report; bind real audio/reference and ordered split hashes; seal blind references; pre-register one committed CPU runner command; pass cross-split isolation plus byte-identical collection/core replay with a receipt-bound execution envelope without changing the pinned BASE models.
+- **In Progress Task:** `UP-SYNC`
+- **Current Objective:** Integrate trusted upstream `main` at `67d6d880841e0c8f3a33e0f98d3bfc2122e34eff`, adopt immutable release baseline `v1.4.5`, and preserve every downstream EVAL commit and evidence identity without rebase or squash.
+- **Next Gate:** Fast-forward mirror `main`, merge upstream into the downstream overlay on `sync/upstream-v1.4.5`, atomically update all accepted-baseline fields and the patch ledger, then pass environment, manifest, source-isolation, and EVAL regression gates before restoring `EVAL-01`.
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Upstream Repository:** `modelscope/FunASR`
 - **Baseline Ref:** `v1.4.3`

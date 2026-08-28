@@ -40,13 +40,13 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
 |---|---|---|---|
 | `BOOT-01` | Done | Fork topology, pinned Python environment, doctor/smoke entry point, agent workflows, governance documents and CI | `origin`/fetch-only `upstream` are correct; baseline resolves to the recorded commit; doctor, governance, manifest, unit, and static checks pass without downloading a model |
 | `BASE-01` | Done | Reproducible Paraformer offline and SenseVoiceSmall control runs | Same frozen audio/normalizer; exact model revisions and commands recorded; CER components, RTF P50/P95, peak RSS, cold/warm timing reported |
-| `EVAL-01` | **In Progress** | Frozen evaluator, seed manifest, normalizers, report schema, and dataset register | Hand-calculated fixtures match CER/MER; split and audio/text hashes are stable; repeated evaluation produces byte-stable core metrics |
+| `EVAL-01` | Pending | Frozen evaluator, seed manifest, normalizers, report schema, and dataset register | Hand-calculated fixtures match CER/MER; split and audio/text hashes are stable; repeated evaluation produces byte-stable core metrics |
 | `TRAIN-01` | Pending | CPU-feasible tiny-training and checkpoint round trip | Forward/backward/update work; loss descends on a tiny subset; saved checkpoint reloads; resulting inference and config lineage are verified |
 | `EXP-01` | Pending | First one-variable contextual-bias experiment | Hypothesis and regression budget declared before results; all seeds reported; dev gain is confirmed on the blind set and error taxonomy explains the change |
 | `STREAM-01` | Pending | Paraformer-Streaming baseline, stream simulator, and long-stream tests | Chunk/look-back/VAD settings fixed; first partial, stable token, finalization, churn, RTF, reset, and boundary accuracy reported |
 | `SERVE-01` | Pending | Downstream-qualified ASR service contract and reproducible deployment profile | External clients use only the versioned API; model/runtime/image revisions are pinned; offline and streaming integration, session isolation, bounded resources, health, recovery, and target-load behavior pass |
 | `MAINT-01` | Done | Bounded progress history, strict experiment provenance, upstream drift monitoring, and source-isolation guard | Active progress is month/record/line bounded; all task references resolve; executed experiments bind reproducible hashes, hardware, command, metrics, and reports; scheduled CI fails on excessive drift or unregistered upstream-core changes |
-| `UP-SYNC` | Scheduled | Recurring upstream drift measurement and controlled integration | Record full SHAs and ahead/behind for mirror main, active develop, and accepted baseline; use `sync/upstream-*`; resolve conflicts without erasing downstream evidence or broadening core patches |
+| `UP-SYNC` | **In Progress** | Recurring upstream drift measurement and controlled integration | Record full SHAs and ahead/behind for mirror main, active develop, and accepted baseline; use `sync/upstream-*`; resolve conflicts without erasing downstream evidence or broadening core patches |
 
 ## Gate Details
 
