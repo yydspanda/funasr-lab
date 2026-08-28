@@ -158,14 +158,14 @@ def test_realtime_page_publishes_verified_v142_quickstart(built_site):
         ('en/deploy/llama-cpp.html', 'Windows AMD'),
     ),
 )
-def test_llama_cpp_pages_render_v020_download_matrix(built_site, relative, boundary):
+def test_llama_cpp_pages_render_v021_download_matrix(built_site, relative, boundary):
     soup = read_soup(built_site / relative)
     section = soup.select_one('[data-section="downloads"]')
 
     assert section
     rows = section.select('[data-download-asset]')
     assert len(rows) == 9
-    assert all(row.select_one('a[href*="runtime-llamacpp-v0.2.0"]') for row in rows)
+    assert all(row.select_one('a[href*="runtime-llamacpp-v0.2.1"]') for row in rows)
     assert all(len(row.select_one('[data-field="sha256"]').get_text(strip=True)) == 64 for row in rows)
     assert boundary in soup.get_text(' ', strip=True)
 
@@ -393,6 +393,28 @@ def test_ecosystem_refresh_tracks_current_release_and_merged_native_runtime(
         assert marker in card_text
 
 
+@pytest.mark.parametrize('relative', ('ecosystem.html', 'en/ecosystem.html'))
+def test_gpt_sovits_card_exposes_the_merged_qwen3_runtime_contract(
+    built_site, relative
+):
+    soup = read_soup(built_site / relative)
+    anchor = soup.select_one(
+        '.card-title a[href="https://github.com/RVC-Boss/GPT-SoVITS"]'
+    )
+    assert anchor
+    card = anchor.find_parent(class_='card')
+    assert card
+    links = {link.get('href') for link in card.select('a[href]')}
+    assert {
+        'https://github.com/RVC-Boss/GPT-SoVITS/pull/2801',
+        'https://github.com/RVC-Boss/GPT-SoVITS/pull/2803',
+        'https://github.com/RVC-Boss/GPT-SoVITS/pull/2824',
+    } <= links
+    text = card.get_text(' ', strip=True)
+    for marker in ('Fun-ASR-Nano', 'Transformers', '>=4.51,<5', 'Qwen3', 'KeyError'):
+        assert marker in text
+
+
 @pytest.mark.parametrize(
     ('relative', 'peer', 'markers'),
     (
@@ -503,3 +525,62 @@ def test_hashed_asset_tampering_fails_validation(built_site):
         stream.write(b'changed')
 
     assert any(f'asset hash mismatch {asset}' in error for error in validate_output(built_site))
+
+
+@pytest.mark.parametrize(
+    ('relative', 'peer', 'markers'),
+    (
+        (
+            'blog/funasr-v1-4-3-pypi-release.html',
+            '/en/blog/funasr-v1-4-3-pypi-release.html',
+            ('FunASR v1.4.3', 'Silero VAD', '固定 K', '167', 'SHA256SUMS-v1.4.3'),
+        ),
+        (
+            'en/blog/funasr-v1-4-3-pypi-release.html',
+            '/blog/funasr-v1-4-3-pypi-release.html',
+            ('FunASR v1.4.3', 'Silero VAD', 'fixed-K', '167', 'SHA256SUMS-v1.4.3'),
+        ),
+    ),
+)
+def test_v1_4_3_release_blog_is_bilingual_and_verifiable(
+    built_site, relative, peer, markers
+):
+    soup = read_soup(built_site / relative)
+    text = soup.get_text(' ', strip=True)
+
+    assert soup.select_one('link[rel="canonical"]')['href'].endswith('/' + relative)
+    assert soup.select_one(f'link[rel="alternate"][href$="{peer}"]')
+    assert soup.select_one('script[type="application/ld+json"]')
+    assert soup.select_one('a[href="https://github.com/modelscope/FunASR/releases/tag/v1.4.3"]')
+    for marker in markers:
+        assert marker in text
+
+    root = ET.parse(built_site / 'sitemap.xml').getroot()
+    namespace = {'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+    urls = {
+        item.findtext('sitemap:loc', namespaces=namespace)
+        for item in root.findall('sitemap:url', namespace)
+    }
+    assert f'https://www.funasr.com/{relative}' in urls
+
+
+@pytest.mark.parametrize(
+    ('relative', 'href'),
+    (
+        ('blog/index.html', '/blog/funasr-v1-4-5-pypi-llama-cpp-release.html'),
+        ('en/blog/index.html', '/en/blog/funasr-v1-4-5-pypi-llama-cpp-release.html'),
+    ),
+)
+def test_blog_index_features_latest_release_and_preserves_history(
+    built_site, relative, href
+):
+    soup = read_soup(built_site / relative)
+    feature = soup.select_one(f'.launch-feature a[href="{href}"]')
+
+    assert feature
+    assert 'v1.4.5' in feature.get_text(' ', strip=True)
+    history = soup.select_one('.previous-release')
+    assert history
+    history_text = history.get_text(' ', strip=True)
+    assert 'v1.4.3' in history_text
+    assert 'v1.4.0' in history_text

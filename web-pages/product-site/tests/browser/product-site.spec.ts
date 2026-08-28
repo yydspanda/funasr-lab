@@ -135,13 +135,13 @@ for (const viewport of [
   { name: 'mobile', width: 390, height: 844 },
   { name: 'desktop', width: 1440, height: 900 },
 ]) {
-  test(`llama.cpp v0.2.0 download matrix is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+  test(`llama.cpp v0.2.1 download matrix is stable at ${viewport.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     await page.goto('/deploy/llama-cpp.html');
 
     const section = page.locator('[data-section="downloads"]');
     await expect(section.locator('[data-download-asset]')).toHaveCount(9);
-    await expect(section.locator('a[href*="runtime-llamacpp-v0.2.0"]')).toHaveCount(9);
+    await expect(section.locator('a[href*="runtime-llamacpp-v0.2.1"]')).toHaveCount(9);
     await expect(page.getByText('Windows AMD Vulkan', { exact: false }).first()).toBeVisible();
 
     await section.evaluate((node) => node.scrollIntoView({ block: 'start' }));
@@ -293,12 +293,99 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1440, height: 900 },
+]) {
+  test(`GPT-SoVITS dependency contract is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+
+    for (const route of ['/ecosystem.html', '/en/ecosystem.html']) {
+      await page.goto(route);
+      const card = page.locator('.card').filter({ hasText: 'GPT-SoVITS' });
+
+      await expect(card).toHaveCount(1);
+      await expect(card).toContainText('Transformers >=4.51,<5');
+      await expect(card.locator('.card-tag', { hasText: 'Qwen3' })).toBeVisible();
+      await expect(card.locator('a[href="https://github.com/RVC-Boss/GPT-SoVITS/pull/2824"]')).toBeVisible();
+
+      const layout = await page.evaluate(() => ({
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }));
+      expect(layout.overflow).toBeLessThanOrEqual(1);
+    }
+
+    await page.screenshot({
+      path: testInfo.outputPath(`gpt-sovits-ecosystem-${viewport.name}.png`),
+      fullPage: true,
+    });
+  });
+}
+
 test('reduced motion disables smooth scrolling', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/en/');
   const behavior = await page.locator('html').evaluate((node) => getComputedStyle(node).scrollBehavior);
   expect(behavior).toBe('auto');
 });
+
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1440, height: 900 },
+]) {
+  test(`v1.4.5 release discovery is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    for (const release of [
+      {
+        language: 'zh',
+        index: '/blog/',
+        article: '/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
+      },
+      {
+        language: 'en',
+        index: '/en/blog/',
+        article: '/en/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
+      },
+    ]) {
+      await page.goto(release.index);
+      await expect(
+        page.locator(`.launch-feature a[href="${release.article}"]`),
+      ).toBeVisible();
+      const history = page.locator('.previous-release .post-card');
+      await expect(history).toHaveCount(3);
+      const indexLayout = await history.evaluateAll((cards) => ({
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        rows: new Set(cards.map((card) => Math.round(card.getBoundingClientRect().top))).size,
+      }));
+      expect(indexLayout.overflow).toBeLessThanOrEqual(1);
+      expect(indexLayout.rows).toBe(viewport.name === 'mobile' ? 3 : 1);
+
+      await page.goto(release.article);
+      await expect(page.locator('h1')).toContainText('FunASR v1.4.5');
+      await expect(page.getByText('funasr[knf]==1.4.5', { exact: false })).toBeVisible();
+      await expect(page.getByText('runtime-llamacpp-v0.2.1', { exact: false })).toBeVisible();
+
+      const articleLayout = await page.evaluate(() => {
+        const navigation = document.querySelector<HTMLElement>('nav.nav');
+        const heading = document.querySelector<HTMLElement>('h1');
+        return {
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          navigationBottom: navigation?.getBoundingClientRect().bottom ?? 0,
+          headingTop: heading?.getBoundingClientRect().top ?? 0,
+        };
+      });
+      expect(articleLayout.overflow).toBeLessThanOrEqual(1);
+      expect(articleLayout.headingTop).toBeGreaterThanOrEqual(articleLayout.navigationBottom + 16);
+
+      await page.screenshot({
+        path: testInfo.outputPath(
+          `v1.4.5-release-${release.language}-${viewport.name}.png`,
+        ),
+        fullPage: true,
+      });
+    }
+  });
+}
 
 test('llama.cpp blog heading clears fixed navigation on mobile', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
