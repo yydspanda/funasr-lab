@@ -8,10 +8,10 @@
 
 - **Current Stage:** `EVAL`
 - **Upstream Repository:** `modelscope/FunASR`
-- **Baseline Ref:** `v1.4.5`
-- **Baseline Commit:** `4df59cc15386ff3bb10916256d807ebc5c85f81d`
-- **Baseline Date:** `2026-08-28`
-- **Last Updated:** `2026-08-28`
+- **Baseline Ref:** `v1.4.8`
+- **Baseline Commit:** `55b662ccf9ea77237ba9253b3bddd953d4184f84`
+- **Baseline Date:** `2026-08-30`
+- **Last Updated:** `2026-08-30`
 
 ## Stage Order
 
