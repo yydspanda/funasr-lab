@@ -11,15 +11,26 @@
 #include "gguf.h"
 
 #include <cctype>
+#include <cstdarg>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <string>
 #include <vector>
 
 static const float LN_EPS = 1e-5f;
+
+static void trace_stage(const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  vfprintf(stderr, format, args);
+  va_end(args);
+  fputc('\n', stderr);
+  fflush(stderr);
+}
 
 // ---- audio loader: any wav/mp3/flac, any rate/channels -> 16k mono (miniaudio) ----
 #define FUNASR_AUDIO_IMPLEMENTATION
@@ -59,7 +70,8 @@ static std::vector<float> compute_fbank(std::vector<float> wav,int&T_out){
 }
 
 struct cfg { int d_model=512,n_head=4,num_blocks=50,tp_blocks=20,kernel=11,vocab=25055,blank=0; };
-struct model { cfg c; ggml_context*ctx_w=nullptr; std::map<std::string,ggml_tensor*> t;
+struct model { cfg c; gguf_context*gguf=nullptr; ggml_context*ctx_meta=nullptr; ggml_context*ctx_w=nullptr;
+  ggml_backend_buffer_t weights_buffer=nullptr; std::map<std::string,ggml_tensor*> t;
   ggml_tensor* g(const std::string&n){auto it=t.find(n);if(it==t.end()){fprintf(stderr,"missing %s\n",n.c_str());exit(1);}return it->second;} };
 
 struct graph_backend {
@@ -94,10 +106,38 @@ static ggml_backend_dev_t find_gpu_backend_device(const std::string&backend_name
   return integrated_fallback;
 }
 
+static graph_backend initialize_device_backend(const std::string&name,ggml_backend_dev_t dev){
+  graph_backend out;
+  const char*dev_name=ggml_backend_dev_name(dev);
+  const char*dev_desc=ggml_backend_dev_description(dev);
+  fprintf(stderr,"initializing %s backend on %s (%s)\n",name.c_str(),dev_name,dev_desc);
+  fflush(stderr);
+  out.backend=ggml_backend_dev_init(dev,nullptr);
+  if(!out.backend){
+    fprintf(stderr,"failed to initialize %s backend on %s\n",name.c_str(),dev_name);
+    exit(1);
+  }
+  fprintf(stderr,"initialized %s backend on %s; resolving buffer type\n",name.c_str(),dev_name);
+  fflush(stderr);
+  out.buffer_type=ggml_backend_get_default_buffer_type(out.backend);
+  if(!out.buffer_type){
+    fprintf(stderr,"%s backend on %s has no default buffer type\n",name.c_str(),dev_name);
+    exit(1);
+  }
+  fprintf(stderr,"%s backend ready on %s\n",name.c_str(),dev_name);
+  fflush(stderr);
+  out.is_cpu=false;
+  return out;
+}
+
 static graph_backend make_graph_backend(const std::string&name){
   graph_backend out;
   if(name=="cpu"){
     out.backend=ggml_backend_cpu_init();
+    if(!out.backend){
+      fprintf(stderr,"failed to initialize cpu backend\n");
+      exit(1);
+    }
     out.buffer_type=ggml_backend_get_default_buffer_type(out.backend);
     out.is_cpu=true;
   } else if(name=="cuda"){
@@ -106,18 +146,14 @@ static graph_backend make_graph_backend(const std::string&name){
       fprintf(stderr,"CUDA backend requested, but no GPU backend is available; build with -DGGML_CUDA=ON\n");
       exit(1);
     }
-    out.backend=ggml_backend_dev_init(dev,nullptr);
-    out.buffer_type=ggml_backend_get_default_buffer_type(out.backend);
-    out.is_cpu=false;
+    return initialize_device_backend(name,dev);
   } else if(name=="vulkan"){
     ggml_backend_dev_t dev=find_gpu_backend_device("vulkan");
     if(!dev){
       fprintf(stderr,"Vulkan backend requested, but no Vulkan GPU backend is available; build with -DGGML_VULKAN=ON and install a Vulkan driver/ICD\n");
       exit(1);
     }
-    out.backend=ggml_backend_dev_init(dev,nullptr);
-    out.buffer_type=ggml_backend_get_default_buffer_type(out.backend);
-    out.is_cpu=false;
+    return initialize_device_backend(name,dev);
   } else {
     fprintf(stderr,"unsupported backend '%s' (expected cpu|cuda|vulkan)\n",name.c_str());
     exit(1);
@@ -127,6 +163,52 @@ static graph_backend make_graph_backend(const std::string&name){
     exit(1);
   }
   return out;
+}
+
+static void free_model(model&m){
+  if(m.gguf){gguf_free(m.gguf);m.gguf=nullptr;}
+  if(m.ctx_meta){ggml_free(m.ctx_meta);m.ctx_meta=nullptr;}
+  if(m.weights_buffer){ggml_backend_buffer_free(m.weights_buffer);m.weights_buffer=nullptr;}
+  if(m.ctx_w){ggml_free(m.ctx_w);m.ctx_w=nullptr;}
+  m.t.clear();
+}
+
+static bool load_model_weights(const std::string&path,ggml_backend_buffer_type_t buffer_type,model&m){
+  gguf_init_params gp={true,&m.ctx_meta};
+  m.gguf=gguf_init_from_file(path.c_str(),gp);
+  if(!m.gguf){fprintf(stderr,"load gguf failed\n");return false;}
+  const int64_t n_tensors=gguf_get_n_tensors(m.gguf);
+  ggml_init_params wp={(size_t)(n_tensors+1)*ggml_tensor_overhead(),nullptr,true};
+  m.ctx_w=ggml_init(wp);
+  if(!m.ctx_w){fprintf(stderr,"failed to initialize model tensor context\n");free_model(m);return false;}
+  for(int64_t i=0;i<n_tensors;i++){
+    const char*name=gguf_get_tensor_name(m.gguf,i);
+    ggml_tensor*meta=ggml_get_tensor(m.ctx_meta,name);
+    if(!meta){fprintf(stderr,"missing model tensor metadata: %s\n",name);free_model(m);return false;}
+    ggml_tensor*weight=ggml_dup_tensor(m.ctx_w,meta);
+    ggml_set_name(weight,name);
+    m.t[name]=weight;
+  }
+  m.weights_buffer=ggml_backend_alloc_ctx_tensors_from_buft(m.ctx_w,buffer_type);
+  if(!m.weights_buffer){fprintf(stderr,"failed to allocate model weights buffer\n");free_model(m);return false;}
+  ggml_backend_buffer_set_usage(m.weights_buffer,GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+  std::ifstream fin(path,std::ios::binary);
+  if(!fin){fprintf(stderr,"failed to reopen model weights: %s\n",path.c_str());free_model(m);return false;}
+  std::vector<uint8_t> read_buffer;
+  const size_t data_offset=gguf_get_data_offset(m.gguf);
+  for(int64_t i=0;i<n_tensors;i++){
+    const char*name=gguf_get_tensor_name(m.gguf,i);
+    ggml_tensor*weight=m.t[name];
+    const size_t size=ggml_nbytes(weight);
+    const size_t offset=data_offset+gguf_get_tensor_offset(m.gguf,i);
+    read_buffer.resize(size);
+    fin.seekg((std::streamoff)offset,std::ios::beg);
+    fin.read((char*)read_buffer.data(),(std::streamsize)size);
+    if(!fin){fprintf(stderr,"failed to read model tensor: %s\n",name);free_model(m);return false;}
+    ggml_backend_tensor_set(weight,read_buffer.data(),0,size);
+  }
+  return true;
 }
 
 static ggml_tensor* lin(ggml_context*c,ggml_tensor*w,ggml_tensor*b,ggml_tensor*x){auto y=ggml_mul_mat(c,w,x);return b?ggml_add(c,y,b):y;}
@@ -188,8 +270,8 @@ int main(int argc,char**argv){
   graph_backend graph_be=make_graph_backend(backend_name);
 
   // load model
-  model m; gguf_init_params gp={false,&m.ctx_w}; gguf_context*gg=gguf_init_from_file(gguf_path.c_str(),gp);
-  if(!gg){fprintf(stderr,"load gguf failed\n");return 1;}
+  trace_stage("[sensevoice] loading model metadata");
+  model m; if(!load_model_weights(gguf_path,graph_be.buffer_type,m))return 1; gguf_context*gg=m.gguf;
   auto rd=[&](const char*k,int d){int i=gguf_find_key(gg,k);return i<0?d:(int)gguf_get_val_u32(gg,i);};
   m.c.d_model=rd("sv.output_size",512); m.c.n_head=rd("sv.attention_heads",4);
   m.c.num_blocks=rd("sv.num_blocks",50); m.c.tp_blocks=rd("sv.tp_blocks",20);
@@ -197,21 +279,34 @@ int main(int argc,char**argv){
   int qi=gguf_find_key(gg,"sv.query_tokens"); int nq=qi<0?0:(int)gguf_get_arr_n(gg,qi);
   std::vector<int> qtok(nq); for(int i=0;i<nq;i++) qtok[i]=((const int32_t*)gguf_get_arr_data(gg,qi))[i];
   std::vector<std::string> vocab; {int ki=gguf_find_key(gg,"sv.vocab"); if(ki>=0){int nv=gguf_get_arr_n(gg,ki); vocab.resize(nv); for(int i=0;i<nv;i++){const char*s=gguf_get_arr_str(gg,ki,i); vocab[i]=s?s:"";}}}
-  for(int i=0;i<gguf_get_n_tensors(gg);i++){const char*nm=gguf_get_tensor_name(gg,i);m.t[nm]=ggml_get_tensor(m.ctx_w,nm);}
-  gguf_free(gg);
+  trace_stage("[sensevoice] model ready: %d tensors",gguf_get_n_tensors(gg));
+  gguf_free(m.gguf); m.gguf=nullptr; ggml_free(m.ctx_meta); m.ctx_meta=nullptr;
   const int F=560, D=m.c.d_model, V=m.c.vocab;
   bool emit_ids = ids_mode || vocab.empty();   // fall back to ids if the gguf has no vocab
 
   // NOTE: SenseVoiceSmall inference() feeds the RAW log-mel fbank to the encoder;
   // it does NOT apply am.mvn CMVN (that path is unused at inference). Applying it
   // makes the encoder predict <|nospeech|>. So no CMVN here.
-  float*emb=(float*)m.g("embed.weight")->data;   // [16, 560] row-major
+  ggml_tensor*embed=m.g("embed.weight");   // [16, 560] row-major
+  if(embed->ne[0]!=F){fprintf(stderr,"unexpected embed width: %lld\n",(long long)embed->ne[0]);return 1;}
+  for(int id:qtok) if(id<0||id>=embed->ne[1]){fprintf(stderr,"query token out of embed range: %d\n",id);return 1;}
+  std::vector<float> embed_f32((size_t)ggml_nelements(embed));
+  if(embed->type==GGML_TYPE_F32){
+    ggml_backend_tensor_get(embed,embed_f32.data(),0,ggml_nbytes(embed));
+  } else if(embed->type==GGML_TYPE_F16){
+    std::vector<ggml_fp16_t> embed_f16(embed_f32.size());
+    ggml_backend_tensor_get(embed,embed_f16.data(),0,ggml_nbytes(embed));
+    for(size_t i=0;i<embed_f32.size();i++)embed_f32[i]=ggml_fp16_to_fp32(embed_f16[i]);
+  } else {
+    fprintf(stderr,"unsupported embed type: %s\n",ggml_type_name(embed->type));return 1;
+  }
   // Run encoder+CTC on one fbank window [T,F]; returns decoded text string.
   auto run_seg=[&](const std::vector<float>& fb,int T) -> std::string {
     int N=nq+T; std::vector<float> inp((size_t)N*F);
-    for(int i=0;i<nq;i++) memcpy(&inp[(size_t)i*F], &emb[(size_t)qtok[i]*F], F*sizeof(float));
+    for(int i=0;i<nq;i++) memcpy(&inp[(size_t)i*F], &embed_f32[(size_t)qtok[i]*F], F*sizeof(float));
     memcpy(&inp[(size_t)nq*F], fb.data(), (size_t)T*F*sizeof(float));
     float sc=sqrtf((float)D); for(auto&v:inp)v*=sc; add_posenc(inp,N,F);
+    trace_stage("[sensevoice] building graph: %d frames",N);
     ggml_init_params cp={(size_t)1024*1024*1024,nullptr,true}; ggml_context*c=ggml_init(cp);
     ggml_tensor*x=ggml_new_tensor_2d(c,GGML_TYPE_F32,F,N); ggml_set_input(x);
     ggml_tensor*h=sanm_layer(c,m,"encoder.encoders0.0.",x,N,false);
@@ -222,9 +317,15 @@ int main(int argc,char**argv){
     ggml_tensor*logits=lin(c,m.g("ctc.ctc_lo.weight"),m.g("ctc.ctc_lo.bias"),h);  // [V, N]
     ggml_set_output(logits);
     ggml_cgraph*gf=ggml_new_graph_custom(c,32768,false); ggml_build_forward_expand(gf,logits);
+    trace_stage("[sensevoice] graph built");
+    trace_stage("[sensevoice] allocating graph");
     ggml_gallocr_t ga=ggml_gallocr_new(graph_be.buffer_type); ggml_gallocr_alloc_graph(ga,gf);
+    trace_stage("[sensevoice] graph allocated");
     ggml_backend_tensor_set(x,inp.data(),0,ggml_nbytes(x)); if(graph_be.is_cpu) ggml_backend_cpu_set_n_threads(graph_be.backend,8);
-    if(ggml_backend_graph_compute(graph_be.backend,gf)!=GGML_STATUS_SUCCESS){fprintf(stderr,"compute failed\n");}
+    trace_stage("[sensevoice] compute starting");
+    enum ggml_status compute_status=ggml_backend_graph_compute(graph_be.backend,gf);
+    trace_stage("[sensevoice] compute complete: status=%d",(int)compute_status);
+    if(compute_status!=GGML_STATUS_SUCCESS){fprintf(stderr,"compute failed\n");}
     std::vector<float> lg((size_t)V*N); ggml_backend_tensor_get(logits,lg.data(),0,ggml_nbytes(logits));
     std::vector<int> seg_ids; int prev=-1;   // greedy CTC: argmax per frame -> collapse -> drop blank
     for(int n=0;n<N;n++){ const float*col=&lg[(size_t)n*V]; int am=0; float best=col[0];
@@ -240,9 +341,13 @@ int main(int argc,char**argv){
   int64_t t0=ggml_time_us();
   int srt_idx=0;
   if(!vad_path.empty()){
+    trace_stage("[sensevoice] loading audio");
     std::vector<float> wav; if(!funasr_load_audio_16k_mono(wav_path.c_str(),wav)){fprintf(stderr,"read audio failed\n");return 1;}
+    trace_stage("[sensevoice] audio ready: %zu samples",wav.size());
     std::vector<std::pair<int,int>> segs;
+    trace_stage("[sensevoice] running VAD");
     if(!funasr_vad_segments(vad_path,wav,vad_maxseg,segs)){fprintf(stderr,"vad failed\n");return 1;}
+    trace_stage("[sensevoice] VAD ready: %zu segments",segs.size());
     for(auto&s:segs){ int off=(int)((int64_t)s.first*16000/1000), end=(int)((int64_t)s.second*16000/1000);
       if(end>(int)wav.size())end=wav.size(); if(end-off<WINLEN)continue;
       std::vector<float> seg(wav.begin()+off,wav.begin()+end); int t=0; auto fb=compute_fbank(seg,t);
@@ -256,7 +361,9 @@ int main(int argc,char**argv){
   } else {
     int32_t T=0,Fc=F; std::vector<float> fb; int end_ms=0;
     if(!wav_path.empty()){
+      trace_stage("[sensevoice] loading audio");
       std::vector<float> wav; if(!funasr_load_audio_16k_mono(wav_path.c_str(),wav)){fprintf(stderr,"read audio failed\n");return 1;}
+      trace_stage("[sensevoice] audio ready: %zu samples",wav.size());
       end_ms=(int)((int64_t)wav.size()*1000/16000);
       int t=0; fb=compute_fbank(wav,t); T=t;
     } else {
@@ -272,7 +379,7 @@ int main(int argc,char**argv){
   }
   if(!srt_mode) printf("\n");
   fprintf(stderr,"[sensevoice] done %.2fs\n",(ggml_time_us()-t0)/1e6);
+  free_model(m);
   ggml_backend_free(graph_be.backend);
-  if(m.ctx_w) ggml_free(m.ctx_w);
   return 0;
 }

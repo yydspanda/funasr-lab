@@ -15,6 +15,7 @@ from registry import deployment_pairs, load_registry, validate_registry  # noqa:
 
 REGISTRY = SITE_ROOT / 'data' / 'deployments.json'
 EXPECTED_IDS = {
+    'moss-transcribe-diarize',
     'vllm',
     'sensevoice-tensorrt',
     'llama-cpp',
@@ -95,11 +96,98 @@ def test_vllm_contract_tracks_native_funasr_release_and_h100_validation(valid_re
     assert 'official funasr split-engine' in limitation
 
 
+def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_registry):
+    entry = next(
+        item for item in valid_registry['deployments']
+        if item['id'] == 'moss-transcribe-diarize'
+    )
+
+    assert entry['maturity'] == 'community-verified'
+    assert entry['models'] == [
+        'OpenMOSS-Team/MOSS-Transcribe-Diarize (third-party Apache-2.0 model)'
+    ]
+    assert entry['tested'] == {
+        'funasr': 'AutoModel diarized_json adapter; third-party model@e8681d68',
+        'runtime': 'vLLM 0.27.1 / Torch 2.13.0+cu129 / H100 80GB',
+        'verified': '2026-08-30',
+    }
+    assert 'LocalAI / moss-transcribe.cpp' in entry['interfaces']
+    assert {'cpu', 'desktop-edge-gpu'} <= set(entry['hardware'])
+
+    install = '\n'.join(entry['commands']['install'])
+    assert 'vllm[audio]' in install
+    assert 'vllm-0.27.1%2Bcu129' in install
+    assert 'bf0d52faa2a51e7a01c6856a7a8a2d1307fd0ff711415d34168a67ffac0fa47b' in install
+    assert 'OpenMOSS-Team/MOSS-Transcribe-Diarize' in install
+    assert 'e8681d68e7042738ffca8ac8212bc8fcb1131ab8' in install
+
+    launch = '\n'.join(entry['commands']['launch'])
+    assert 'vllm serve OpenMOSS-Team/MOSS-Transcribe-Diarize' in launch
+    assert '--trust-remote-code' in launch
+    smoke = '\n'.join(entry['commands']['smoke'])
+    assert '/v1/audio/transcriptions' in smoke
+    assert 'response_format=diarized_json' in smoke
+    assert "payload.get('segments'" in smoke
+    assert "from funasr import AutoModel" in smoke
+    assert "backend='vllm'" in smoke
+    assert "vllm_response_format='diarized_json'" in smoke
+    assert "result['raw_text']" in smoke
+    assert "result['sentence_info']" in smoke
+
+    evidence_urls = {item['url'] for item in entry['evidence']}
+    assert 'https://github.com/OpenMOSS/MOSS-Transcribe-Diarize' in evidence_urls
+    assert (
+        'https://github.com/OpenMOSS/MOSS-Transcribe-Diarize/commit/'
+        'cb765f2b0fe6f7a298aa2002e2281ae693d1f3c3'
+    ) in evidence_urls
+    assert (
+        'https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/tree/'
+        'e8681d68e7042738ffca8ac8212bc8fcb1131ab8'
+    ) in evidence_urls
+    assert 'https://github.com/modelscope/FunASR/pull/3558' in evidence_urls
+    assert 'https://github.com/vllm-project/vllm/pull/48543' in evidence_urls
+    assert (
+        'https://github.com/vllm-project/recipes/blob/'
+        'd3f3136ad9d549ddf488f56c9b149ff4a92fc646/'
+        'models/OpenMOSS-Team/MOSS-Transcribe-Diarize.yaml'
+    ) in evidence_urls
+    assert 'https://github.com/localai-org/moss-transcribe.cpp' in evidence_urls
+    assert 'https://github.com/mudler/LocalAI' in evidence_urls
+
+    english = entry['translations']['en']
+    assert 'OpenMOSS' in english['summary']
+    assert 'third-party' in english['summary'].lower()
+    assert 'FunASR AutoModel' in english['summary']
+    assert 'external VAD' in english['selection_reason']
+    assert 'FunASR AutoModel' in english['selection_reason']
+    assert 'FunASR AutoModel API' not in ' '.join(english['not_fit'])
+    assert 'sentence_info' in english['operations'][-1]
+    assert 'raw_text' in english['operations'][-1]
+    assert 'diarized_json' in english['operations'][-1]
+    assert 'diarized_json' in english['troubleshooting'][-1]
+    assert 'internal segmentation' in english['primary_limitation']
+    assert 'FunASR model' in english['primary_limitation']
+    assert any('LocalAI' in item and 'GGUF' in item for item in english['fit'])
+    assert not any(
+        item == 'CPU, desktop-edge, or native Windows deployments'
+        for item in english['not_fit']
+    )
+    assert any('third-party C++' in item for item in english['operations'])
+    assert any(
+        benchmark['hardware'] == 'NVIDIA H100 80GB HBM3'
+        and '15.1685 s' in benchmark['audio']
+        and '43dccc068506439cb633b382b6b98185baa837363d08cc5f7152ca89b0fdc3c8' in benchmark['audio']
+        and 'S01 and S02' in benchmark['result']
+        and 'contract smoke' in benchmark['qualification']
+        for benchmark in entry['benchmarks']
+    )
+
+
 def test_audio_cpp_contract_tracks_mainline_nano_and_sensevoice(valid_registry):
     entry = next(item for item in valid_registry['deployments'] if item['id'] == 'audio-cpp')
     llama_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'llama-cpp')
 
-    assert valid_registry['verified'] == '2026-08-13'
+    assert valid_registry['verified'] == '2026-08-30'
     assert entry['maturity'] == 'community-verified'
     assert entry['selector_rank'] > llama_cpp['selector_rank']
     assert entry['tested'] == {
@@ -211,39 +299,53 @@ def test_sensevoice_tensorrt_contract_tracks_merged_native_runtime(valid_registr
     assert 'tensorrt version' in limitation
 
 
-def test_llama_cpp_contract_tracks_v021_release_assets(valid_registry):
+def test_llama_cpp_contract_tracks_v026_release_assets(valid_registry):
     entry = next(item for item in valid_registry['deployments'] if item['id'] == 'llama-cpp')
 
     assert entry['tested'] == {
-        'funasr': 'runtime-llamacpp-v0.2.1',
-        'runtime': 'llama.cpp@803b7fca',
-        'verified': '2026-08-27',
+        'funasr': 'runtime-llamacpp-v0.2.6',
+        'runtime': 'llama.cpp@c8d43b10',
+        'verified': '2026-08-30',
     }
-    assert len(entry['downloads']) == 9
-    assert {item['archive'] for item in entry['downloads']} == {
-        'funasr-llamacpp-linux-arm64.tar.gz',
-        'funasr-llamacpp-linux-x64.tar.gz',
-        'funasr-llamacpp-linux-x64-avx2.tar.gz',
-        'funasr-llamacpp-linux-x64-vulkan.tar.gz',
-        'funasr-llamacpp-macos-arm64.tar.gz',
-        'funasr-llamacpp-windows-x64.zip',
-        'funasr-llamacpp-windows-x64-avx2.zip',
-        'funasr-llamacpp-windows-x64-vulkan.zip',
-        'funasr-llamacpp-windows-x64-cuda.zip',
+    assert len(entry['downloads']) == 10
+    assert {item['archive']: item['sha256'] for item in entry['downloads']} == {
+        'funasr-llamacpp-linux-arm64.tar.gz': '7bca29cfa3c9a08e235a62212ca9e00f6656e59a8f07078966a2bfda1e5aa1f9',
+        'funasr-llamacpp-linux-x64.tar.gz': '779967de1c528c2be966bcc47f246e7d3e6fcdb748d9491263062f4120f35e52',
+        'funasr-llamacpp-linux-x64-avx2.tar.gz': 'aaebc5470f846ce915200b35d6e9f9bd0a0d3ed399d39e49bdeb7a1f1782bc70',
+        'funasr-llamacpp-linux-x64-vulkan.tar.gz': 'f02d41e98e9d4041f0896661007193810f025484d2175958f7c1313d5c90ec46',
+        'funasr-llamacpp-macos-arm64.tar.gz': 'bda59474202b887190f59d25b7b42c714469efae71276072c12fa0a38de68792',
+        'funasr-llamacpp-windows-x64.zip': 'f6a73a548413ba9fbaf2145263ea66ec53cbdad1fb11790dbeeee493e339492e',
+        'funasr-llamacpp-windows-x64-avx2.zip': '062cda8fefadd31c3e811227116daccf448a8520f4b0bb168d225c896e65ebbd',
+        'funasr-llamacpp-windows-x64-vulkan.zip': 'debf8007e55011cad06081e7b8a78972f1b8fe672bc324d41e650d68821f6a6a',
+        'funasr-llamacpp-windows-x64-cuda.zip': '148657911fb666b7af6ec43af2e23a0984e3259012b4c39f95631b717feb6840',
+        'funasr-llamacpp-windows-x64-cuda-blackwell.zip': 'e32961a753f40888182f352fa551159c5165a6a77718ae4ade316aedfea4b1c2',
     }
     assert all(item['url'].startswith(
-        'https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.1/'
+        'https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/'
     ) for item in entry['downloads'])
-    assert all(len(item['sha256']) == 64 for item in entry['downloads'])
-    assert any('actions/runs/32991388379' in item['url'] for item in entry['evidence'])
+    assert any('actions/runs/33290555297' in item['url'] for item in entry['evidence'])
+    assert any('pull/3570' in item['url'] for item in entry['evidence'])
     assert any(
         'download-funasr-model.sh sensevoice ./funasr-gguf f16' in command
         for command in entry['commands']['install']
     )
     assert 'sensevoice-small-f16.gguf' in entry['commands']['launch'][0]
+    assert 'Blackwell' in entry['translations']['en']['primary_limitation']
+    assert 'cuBLAS' in entry['translations']['en']['primary_limitation']
     assert 'AMD' in entry['translations']['en']['primary_limitation']
     assert 'RX 9070 XT' in entry['translations']['en']['primary_limitation']
     assert 'Android/Mali' in entry['translations']['en']['primary_limitation']
+    troubleshooting = ' '.join(entry['translations']['en']['troubleshooting'])
+    assert 'initializing' in troubleshooting
+    assert 'resolving buffer type' in troubleshooting
+    assert 'backend ready' in troubleshooting
+    assert 'model ready' in troubleshooting
+    assert 'graph allocated' in troubleshooting
+    assert 'compute starting' in troubleshooting
+    assert any(
+        'F16' in benchmark['model'] and '100/100' in benchmark['result']
+        for benchmark in entry['benchmarks']
+    )
 
 
 def test_sensevoice_native_server_contract_tracks_merged_runtime(valid_registry):
@@ -254,7 +356,7 @@ def test_sensevoice_native_server_contract_tracks_merged_runtime(valid_registry)
     llama_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'llama-cpp')
     audio_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'audio-cpp')
 
-    assert valid_registry['verified'] == '2026-08-13'
+    assert valid_registry['verified'] == '2026-08-30'
     assert entry['maturity'] == 'production-verified'
     assert llama_cpp['selector_rank'] < entry['selector_rank'] < audio_cpp['selector_rank']
     assert entry['tested'] == {

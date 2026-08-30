@@ -135,14 +135,19 @@ for (const viewport of [
   { name: 'mobile', width: 390, height: 844 },
   { name: 'desktop', width: 1440, height: 900 },
 ]) {
-  test(`llama.cpp v0.2.1 download matrix is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+  test(`llama.cpp v0.2.6 download matrix is stable at ${viewport.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     await page.goto('/deploy/llama-cpp.html');
 
     const section = page.locator('[data-section="downloads"]');
-    await expect(section.locator('[data-download-asset]')).toHaveCount(9);
-    await expect(section.locator('a[href*="runtime-llamacpp-v0.2.1"]')).toHaveCount(9);
+    await expect(section.locator('[data-download-asset]')).toHaveCount(10);
+    await expect(section.locator('a[href*="runtime-llamacpp-v0.2.6"]')).toHaveCount(10);
+    await expect(page.getByText('Blackwell', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('Windows AMD Vulkan', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('resolving buffer type', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('model ready', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('graph allocated', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('compute starting', { exact: false }).first()).toBeVisible();
 
     await section.evaluate((node) => node.scrollIntoView({ block: 'start' }));
 
@@ -165,6 +170,41 @@ for (const viewport of [
 
     await page.screenshot({
       path: testInfo.outputPath(`llama-cpp-downloads-${viewport.name}.png`),
+      fullPage: true,
+    });
+  });
+}
+
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1440, height: 900 },
+]) {
+  test(`MOSS AutoModel deployment is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/deploy/moss-transcribe-diarize.html');
+
+    await expect(page.locator('h1')).toHaveText('MOSS 统一转写与说话人分离');
+    await expect(page.getByText('FunASR AutoModel', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('OpenMOSS', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('sentence_info', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('diarized_json', { exact: false }).first()).toBeVisible();
+    await expect(page.locator('a[href="https://github.com/modelscope/FunASR/pull/3558"]')).toBeVisible();
+    await expect(page.locator('a[href="https://github.com/vllm-project/vllm/pull/48543"]')).toBeVisible();
+    await expect(page.locator('a[href*="vllm-project/recipes/blob/d3f3136"]')).toBeVisible();
+    await expect(page.locator('a[href="/en/deploy/moss-transcribe-diarize.html"]')).toBeVisible();
+
+    const layout = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      commandWidths: [...document.querySelectorAll<HTMLElement>('.command-block')].map((node) => ({
+        parent: node.parentElement?.getBoundingClientRect().width ?? 0,
+        width: node.getBoundingClientRect().width,
+      })),
+    }));
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(layout.commandWidths.every(({ parent, width }) => width <= parent + 1)).toBe(true);
+
+    await page.screenshot({
+      path: testInfo.outputPath(`moss-automodel-${viewport.name}.png`),
       fullPage: true,
     });
   });

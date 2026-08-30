@@ -93,11 +93,11 @@ FSMN-VAD without Python.
 
 ### Optional Windows CUDA backend for SenseVoiceSmall
 
-The CPU release ZIPs are portable packages. Tagged releases also publish
-`funasr-llamacpp-windows-x64-cuda.zip` for SenseVoiceSmall graph execution on
-NVIDIA GPUs that match CUDA architecture 86. Download the CUDA ZIP from
-[runtime-llamacpp-v0.1.9](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.1.9),
-then select the backend at runtime:
+The CPU release ZIPs are portable packages. Tagged releases publish separate
+SenseVoiceSmall CUDA packages: `funasr-llamacpp-windows-x64-cuda.zip` targets
+CUDA architecture 86, while `funasr-llamacpp-windows-x64-cuda-blackwell.zip`
+targets CUDA architecture 120 (`sm_120`) for RTX 50 / Blackwell GPUs. Select the
+matching archive, then enable the backend at runtime:
 
 ```bash
 # From the extracted windows-x64-cuda package:
@@ -105,7 +105,9 @@ then select the backend at runtime:
   -m sensevoice-small-q8.gguf --vad fsmn-vad.gguf -a sample.wav --backend cuda
 ```
 
-Build from source to target other GPU architectures:
+The Blackwell package uses the same command from its extracted directory. Build
+from source to target other GPU architectures or to reproduce the architecture
+120 build locally:
 
 ```bash
 cmake -B build-cuda -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
@@ -115,16 +117,20 @@ cmake --build build-cuda -j --target llama-funasr-sensevoice
   -m sensevoice-small-f16.gguf -a sample.wav --backend cuda
 ```
 
-Use the matching `CMAKE_CUDA_ARCHITECTURES` value for your GPU. RTX 50 /
-Blackwell cards report compute capability 12.0 (`sm_120`), so the current
-`windows-x64-cuda` prebuilt package for architecture 86 will not cover those
-cards.
+Use the matching `CMAKE_CUDA_ARCHITECTURES` value for your GPU. A successful
+release workflow build verifies architecture 120 code generation and ZIP
+integrity; it does not prove execution on physical Blackwell hardware. Keep
+hardware-specific reports open until the matching archive is retested on the
+reported GPU.
 
 `--backend cpu` remains the default and is what the portable cross-platform
-prebuilt binaries use. The CUDA package requires an NVIDIA driver compatible
-with the CUDA Toolkit version configured by the release workflow. A binary built
-without `-DGGML_CUDA=ON` exits with a clear message if `--backend cuda` is
-requested.
+prebuilt binaries use. The CUDA ZIPs bundle `cublas64_13.dll` and
+`cublasLt64_13.dll`, include the NVIDIA license, and link the MSVC runtime
+statically, so running the package does not require a separate CUDA Toolkit or
+Visual C++ redistributable installation. It still requires an NVIDIA driver
+compatible with the CUDA Toolkit version configured by the release workflow. A
+binary built without `-DGGML_CUDA=ON` exits with a clear message if
+`--backend cuda` is requested.
 
 ### Optional Linux Vulkan backend for SenseVoiceSmall
 
@@ -175,6 +181,28 @@ vulkaninfo --summary  # Optional driver check when vulkaninfo is installed.
 If the command reports that no Vulkan device is available, update the vendor GPU
 driver first. The package intentionally relies on the system `vulkan-1.dll`
 installed by that driver instead of shipping an SDK copy.
+
+For access violations such as Windows exit code `-1073741819` (`0xC0000005`),
+capture stderr and report the last completed boundary. Runtime v0.2.3 flushes
+each boundary immediately, so the next missing line identifies the failing stage:
+
+| Last completed boundary | Next stage to investigate |
+| --- | --- |
+| no `initializing vulkan backend ...` | device enumeration or selection |
+| `initializing ...` | `ggml_backend_dev_init()` or the driver below it |
+| `initialized ...; resolving buffer type` | default buffer-type resolution |
+| `vulkan backend ready ...` | model metadata loading |
+| `[sensevoice] model ready ...` | audio loading or feature extraction |
+| `[sensevoice] audio ready ...` | VAD, when `--vad` is enabled |
+| `[sensevoice] VAD ready ...` | graph construction |
+| `[sensevoice] graph built` | graph allocation |
+| `[sensevoice] graph allocated` | backend compute submission |
+| `[sensevoice] compute starting` | Vulkan compute or the GPU driver |
+| `[sensevoice] compute complete: status=0` | output transfer or CTC decoding |
+
+Include the GPU model, driver version, complete command, and all stderr lines in
+the issue. These boundaries diagnose the failure location; they do not by
+themselves claim that a driver- or hardware-specific access violation is fixed.
 
 To build on Windows, install the
 [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) with `glslc`,

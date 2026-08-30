@@ -341,9 +341,9 @@ def test_top_level_readmes_surface_current_release_and_edge_runtime():
     }
 
     for name, text in readmes.items():
-        assert 'python -m pip install -U "funasr==1.4.1"' in text, name
-        assert "https://github.com/modelscope/FunASR/releases/tag/v1.4.1" in text, name
-        assert "runtime-llamacpp-v0.2.1" in text, name
+        assert 'python -m pip install -U "funasr==1.4.8"' in text, name
+        assert "https://github.com/modelscope/FunASR/releases/tag/v1.4.8" in text, name
+        assert "runtime-llamacpp-v0.2.6" in text, name
 
     assert "https://www.funasr.com/en/deploy/llama-cpp.html" in readmes["README.md"]
     assert "https://www.funasr.com/deploy/llama-cpp.html" in readmes["README_zh.md"]
@@ -356,11 +356,29 @@ def test_top_level_readmes_surface_current_release_and_edge_runtime():
             "funasr-llamacpp-linux-x64-vulkan.tar.gz",
             "funasr-llamacpp-windows-x64-vulkan.zip",
             "funasr-llamacpp-windows-x64-cuda.zip",
+            "funasr-llamacpp-windows-x64-cuda-blackwell.zip",
         ):
             assert (
-                f"releases/download/runtime-llamacpp-v0.2.1/{asset}" in text
+                f"releases/download/runtime-llamacpp-v0.2.6/{asset}" in text
             ), name
-        assert "releases/download/runtime-llamacpp-v0.1.9/" not in text, name
+        assert "releases/download/runtime-llamacpp-v0.2.1/" not in text, name
+
+
+def test_repository_roadmap_tracks_current_delivery_and_open_work():
+    docs = [
+        (ROOT / "docs/repository_roles.md").read_text(),
+        (ROOT / "docs/repository_roles_zh.md").read_text(),
+    ]
+
+    for text in docs:
+        assert "1.4.8" in text
+        assert "v1.3.26" not in text
+        assert "runtime-llamacpp-v0.2.6" in text
+        assert "MOSS-Transcribe-Diarize" in text
+        assert "https://github.com/modelscope/FunASR/issues/3496" in text
+        assert "https://github.com/modelscope/FunASR/issues/3528" in text
+        assert "https://github.com/modelscope/FunASR/issues/3479" in text
+        assert "https://github.com/huggingface/transformers/pull/46180" in text
 
 
 def test_realtime_demo_documents_partial_and_hotword_boundaries():
