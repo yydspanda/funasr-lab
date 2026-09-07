@@ -129,6 +129,22 @@ def test_troubleshooting_faq_covers_common_install_and_deploy_failures():
             assert marker in text
 
 
+def test_tutorials_keep_model_license_boundaries_model_card_specific():
+    docs = {
+        "en": (ROOT / "docs/tutorial/README.md").read_text(),
+        "zh": (ROOT / "docs/tutorial/README_zh.md").read_text(),
+    }
+
+    assert "Each model weight has its own license" in docs["en"]
+    assert "model card explicitly links" in docs["en"]
+    assert "每个模型权重都有各自的许可" in docs["zh"]
+    assert "模型卡明确链接" in docs["zh"]
+
+    for text in docs.values():
+        assert "自由使用、复制、修改和分享FunASR模型" not in text
+        assert "free to use, copy, modify, and share FunASR models" not in text
+
+
 def test_public_docs_do_not_advertise_stale_release_or_star_copy():
     checked_docs = [
         "docs/repository_roles.md",
@@ -341,8 +357,8 @@ def test_top_level_readmes_surface_current_release_and_edge_runtime():
     }
 
     for name, text in readmes.items():
-        assert 'python -m pip install -U "funasr==1.4.8"' in text, name
-        assert "https://github.com/modelscope/FunASR/releases/tag/v1.4.8" in text, name
+        assert 'python -m pip install -U "funasr==1.4.14"' in text, name
+        assert "https://github.com/modelscope/FunASR/releases/tag/v1.4.14" in text, name
         assert "runtime-llamacpp-v0.2.6" in text, name
 
     assert "https://www.funasr.com/en/deploy/llama-cpp.html" in readmes["README.md"]
@@ -364,6 +380,21 @@ def test_top_level_readmes_surface_current_release_and_edge_runtime():
         assert "releases/download/runtime-llamacpp-v0.2.1/" not in text, name
 
 
+def test_top_level_readme_news_stays_concise():
+    headings = {
+        "README.md": "## What's new",
+        "README_zh.md": "## 最新动态",
+        "README_ja.md": "## 最新情報",
+        "README_ko.md": "## 최신 소식",
+    }
+
+    for name, heading in headings.items():
+        text = (ROOT / name).read_text()
+        news = text.split(heading, 1)[1].split("\n---", 1)[0]
+        assert news.count("\n- ") <= 5, name
+        assert "https://github.com/modelscope/FunASR/releases" in news, name
+
+
 def test_repository_roadmap_tracks_current_delivery_and_open_work():
     docs = [
         (ROOT / "docs/repository_roles.md").read_text(),
@@ -371,7 +402,7 @@ def test_repository_roadmap_tracks_current_delivery_and_open_work():
     ]
 
     for text in docs:
-        assert "1.4.8" in text
+        assert "1.4.14" in text
         assert "v1.3.26" not in text
         assert "runtime-llamacpp-v0.2.6" in text
         assert "MOSS-Transcribe-Diarize" in text
@@ -379,6 +410,36 @@ def test_repository_roadmap_tracks_current_delivery_and_open_work():
         assert "https://github.com/modelscope/FunASR/issues/3528" in text
         assert "https://github.com/modelscope/FunASR/issues/3479" in text
         assert "https://github.com/huggingface/transformers/pull/46180" in text
+
+    assert "speaker identities" not in docs[0]
+    assert "说话人身份识别" not in docs[1]
+
+
+def test_repository_roadmap_exposes_live_contribution_entry_points():
+    docs = [
+        (ROOT / "docs/repository_roles.md").read_text(),
+        (ROOT / "docs/repository_roles_zh.md").read_text(),
+    ]
+    live_queries = [
+        "is%3Aissue+is%3Aopen+label%3A%22help+wanted%22",
+        "is%3Aissue+is%3Aopen+label%3A%22ready+for+PR%22",
+    ]
+
+    for text in docs:
+        for query in live_queries:
+            assert query in text
+        assert "needs feedback" in text
+
+    assert "exact commit" in docs[0]
+    assert "acceptance evidence" in docs[0]
+    assert "exact commit" in docs[1]
+    assert "验收证据" in docs[1]
+
+    contributing = (ROOT / "CONTRIBUTING.md").read_text()
+    assert "## Find a task" in contributing
+    for query in live_queries:
+        assert query in contributing
+    assert "needs feedback" in contributing
 
 
 def test_realtime_demo_documents_partial_and_hotword_boundaries():

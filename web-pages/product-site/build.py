@@ -17,6 +17,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from legacy import normalize_document
 from registry import load_registry, validate_registry
 from selector import MATCH_WEIGHTS
+from documentation import load_catalogue, doc_route, render_source, write_search_indexes
 
 
 SITE_ROOT = Path(__file__).resolve().parent
@@ -139,7 +140,7 @@ def _page_context(
         'assets': assets,
         'github_repository_url': GITHUB_REPOSITORY_URL,
         'github_url': '/go/github',
-        'docs_url': '/go/docs',
+        'docs_url': '/docs/' if language == 'zh' else '/en/docs/',
         'releases_url': '/go/releases',
     }
 
@@ -377,6 +378,61 @@ def build(output_dir: Path) -> dict[str, Any]:
             'hreflang': context['peer_canonical'],
         })
 
+        catalogue = load_catalogue()
+        for language in ('zh', 'en'):
+            prefix = '/en' if language == 'en' else ''
+            peer_prefix = '' if language == 'en' else '/en'
+            for index, entry in enumerate([None, *catalogue['pages']]):
+                route = f'{prefix}/docs/' if entry is None else doc_route(entry['slug'], language)
+                peer = f'{peer_prefix}/docs/' if entry is None else doc_route(entry['slug'], 'en' if language == 'zh' else 'zh')
+                page_title = entry[language] if entry else ('文档中心' if language == 'zh' else 'Documentation')
+                context = _page_context(
+                    language=language, route=route, peer_route=peer,
+                    title=f'{page_title} - FunASR', description=page_title,
+                    date_modified=registry['verified'], navigation=navigation, assets=assets,
+                )
+                context.update({'catalogue': catalogue, 'doc_entry': entry})
+                if entry:
+                    context.update(render_source(entry, language, catalogue))
+                    context['previous'] = catalogue['pages'][index - 2] if index > 1 else None
+                    context['following'] = catalogue['pages'][index] if index < len(catalogue['pages']) else None
+                _render_page(environment, 'docs.html', route_path(stage, route), context)
+                pages.append({'route': route, 'language': language, 'canonical': context['canonical'], 'hreflang': context['peer_canonical']})
+
+        # Reskin old article shells without maintaining another copy of their content.
+        for path in sorted(stage.rglob('*.html')):
+            soup = BeautifulSoup(path.read_text(encoding='utf-8'), 'html.parser')
+            old_nav = soup.select_one('nav[data-product-navigation]')
+            if old_nav is None:
+                continue
+            relative = path.relative_to(stage)
+            language = 'en' if relative.parts[0] == 'en' else 'zh'
+            route = legacy_route(relative)
+            peer = route[3:] if language == 'en' else f'/en{route}'
+            context = _page_context(language=language, route=route, peer_route=peer,
+                title='', description='', date_modified=registry['verified'], navigation=navigation, assets=assets)
+            shell = BeautifulSoup(environment.get_template('base.html').render(**context), 'html.parser')
+            old_nav.replace_with(shell.select_one('.site-header'))
+            soup.body['data-language'] = language
+            soup.body['data-route'] = route
+            soup.body['data-copy-icon'] = assets['lucide/copy.svg']
+            soup.body['class'] = list(soup.body.get('class', [])) + ['legacy-page']
+            for href in (assets['css/site.css'], assets['css/experience.css']):
+                link = soup.new_tag('link', rel='stylesheet', href=href)
+                soup.head.append(link)
+            for src in (assets['js/site.js'], assets['js/experience.js']):
+                script = soup.new_tag('script', src=src, defer=True)
+                soup.body.append(script)
+            footer = soup.find('footer')
+            if footer:
+                footer.replace_with(shell.select_one('.site-footer'))
+            # Article content and ids are untouched; tables gain a scroll container.
+            for table in soup.select('article table'):
+                wrapper = soup.new_tag('div', attrs={'class': 'table-wrap'})
+                table.wrap(wrapper)
+            path.write_text(str(soup), encoding='utf-8')
+
+        write_search_indexes(stage)
         last_modified_by_route = {
             entry['routes'][language]: entry['tested']['verified']
             for entry in registry['deployments']

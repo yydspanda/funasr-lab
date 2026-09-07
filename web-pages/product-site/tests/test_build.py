@@ -90,7 +90,8 @@ def test_visible_repository_links_use_fixed_conversion_routes(tmp_path):
         json_ld = json.loads(soup.select_one('script[type="application/ld+json"]').string)
 
         assert github_hrefs == {'/go/github'}
-        assert soup.select_one('.site-footer a[href="/go/docs"]')
+        docs_route = '/en/docs/' if relative.startswith('en/') else '/docs/'
+        assert soup.select_one(f'.site-footer a[href="{docs_route}"]')
         assert soup.select_one('.site-footer a[href="/go/releases"]')
         assert json_ld['codeRepository'] == 'https://github.com/modelscope/FunASR'
 

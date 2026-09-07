@@ -3,10 +3,18 @@
 # Pretrained Models Released on ModelScope
 
 ## Model License
-You are free to use, copy, modify, and share FunASR models under the conditions of this agreement. You should indicate the model source and author information when using, copying, modifying and sharing FunASR models. You should keep the relevant names of models in [FunASR software].. Full model license could see [license](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
+The FunASR toolkit uses the [MIT software license](../LICENSE). Model weights
+have separate terms: check the exact checkpoint's model card, license file and
+revision before use or redistribution. The [FunASR model agreement](../MODEL_LICENSE)
+applies only to models whose published terms adopt it, not every entry in this
+catalogue. Third-party models, including OpenMOSS MOSS-Transcribe-Diarize, retain
+their original authorship and model-specific licenses.
 
 ## Model Usage
-Ref to [docs](https://modelscope.github.io/FunASR/tutorial.html)
+Start with [model selection](../docs/model_selection.md), the
+[Python SDK tutorial](../docs/tutorial/README.md), and the
+[deployment matrix](../docs/deployment_matrix.md). For MOSS, follow its
+[dedicated adapter and serving guide](../docs/moss_transcribe_diarize.md).
 
 ## Model Zoo
 Here we provided several pretrained models on different datasets. The details of models and datasets can be found on [ModelScope](https://www.modelscope.cn/models?page=1&tasks=auto-speech-recognition).
@@ -105,6 +113,12 @@ Here we provided several pretrained models on different datasets. The details of
 |:----------------------------------------------------------------------------------------------------------------:|:-------------------:|:----------:|:------|
 | [SOND](https://www.modelscope.cn/models/damo/speech_diarization_sond-zh-cn-alimeeting-16k-n16k4-pytorch/summary) | AliMeeting (120 hours) |   40.5M    |    Speaker diarization, profiles and records, Chinese |
 | [SOND](https://www.modelscope.cn/models/damo/speech_diarization_sond-en-us-callhome-8k-n16k4-pytorch/summary)    |  CallHome (60 hours)  |     12M     |    Speaker diarization, profiles and records, English   |
+
+### Third-party Unified Transcription and Diarization
+
+| Model Name | Publisher | Parameters | Notes |
+|:----------:|:---------:|:----------:|:------|
+| [MOSS-Transcribe-Diarize](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) | OpenMOSS | See official model card | Third-party Apache-2.0 model. One offline request returns transcription, timestamps, and speaker labels; FunASR integration does not require an external VAD service. See the [deployment guide](../docs/moss_transcribe_diarize.md). |
 
 ### Timestamp Prediction
 |                                                    Model Name                                     |  Language  |    Training Data    | Parameters | Notes |

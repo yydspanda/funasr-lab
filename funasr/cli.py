@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 
 MODEL_CONFIGS = {
     "sensevoice": {"model": "iic/SenseVoiceSmall", "vad_model": "fsmn-vad", "vad_kwargs": {"max_single_segment_time": 30000}},
@@ -74,6 +75,334 @@ def _join_subtitle_text(left, right):
     return left + right
 
 
+def _subtitle_token_spans(text):
+    spans = []
+    pending_start = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if unicodedata.category(char).startswith("P"):
+            if spans:
+                spans[-1][1] = index + 1
+            elif pending_start is None:
+                pending_start = index
+            index += 1
+            continue
+
+        start = index
+        if char.isascii() and (char.isalnum() or char in "_'"):
+            index += 1
+            while index < len(text):
+                char = text[index]
+                if not (char.isascii() and (char.isalnum() or char in "_'")):
+                    break
+                index += 1
+        elif _is_supported_subtitle_character(char):
+            index += 1
+        else:
+            return []
+        if pending_start is not None:
+            start = pending_start
+            pending_start = None
+        spans.append([start, index])
+
+    if pending_start is not None and spans:
+        spans[-1][1] = len(text)
+    return spans
+
+
+def _is_supported_subtitle_character(char):
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x323AF
+        or 0x3040 <= codepoint <= 0x30FF
+        or 0x31F0 <= codepoint <= 0x31FF
+        or 0xFF66 <= codepoint <= 0xFF9D
+        or 0x1100 <= codepoint <= 0x11FF
+        or 0x3130 <= codepoint <= 0x318F
+        or 0xAC00 <= codepoint <= 0xD7AF
+    )
+
+
+def _subtitle_word_spans(text, words):
+    spans = []
+    cursor = 0
+    for raw_word in words:
+        word = str(raw_word).lstrip("▁").strip()
+        if not word:
+            return []
+        start = text.find(word, cursor)
+        if start < 0 or any(
+            not (char.isspace() or unicodedata.category(char).startswith("P"))
+            for char in text[cursor:start]
+        ):
+            return []
+        if spans:
+            spans[-1][1] = start
+        elif any(
+            not (char.isspace() or unicodedata.category(char).startswith("P"))
+            for char in text[:start]
+        ):
+            return []
+        end = start + len(word)
+        spans.append([0 if not spans and start else start, end])
+        cursor = end
+
+    if any(
+        not (char.isspace() or unicodedata.category(char).startswith("P"))
+        for char in text[cursor:]
+    ):
+        return []
+    if spans:
+        spans[-1][1] = len(text)
+    return spans
+
+
+def _timestamp_pair(item):
+    if not isinstance(item, (list, tuple)) or len(item) < 2:
+        return None
+    try:
+        start = int(item[0])
+        end = int(item[1])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return [start, end] if end > start else None
+
+
+def _timestamps_are_ordered(timestamps):
+    return bool(timestamps) and all(
+        timestamp is not None
+        and timestamp[0] >= 0
+        and (index == 0 or timestamp[0] >= timestamps[index - 1][1])
+        for index, timestamp in enumerate(timestamps)
+    )
+
+
+def _subtitle_break_weights(text, token_spans):
+    """Map token-boundary indices to lexical and punctuation preferences."""
+    boundary_to_token = {span[1]: index + 1 for index, span in enumerate(token_spans)}
+    breaks = {len(token_spans): 0.0}
+
+    try:
+        import logging
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="pkg_resources is deprecated as an API.*",
+                category=UserWarning,
+            )
+            import jieba
+
+        jieba.setLogLevel(logging.ERROR)
+        cursor = 0
+        for piece in jieba.cut(text, cut_all=False, HMM=True):
+            cursor += len(piece)
+            if piece.strip() and any(
+                char.isalnum() or _is_supported_subtitle_character(char)
+                for char in piece
+            ):
+                token_index = boundary_to_token.get(cursor)
+                if token_index is not None:
+                    body_length = sum(
+                        not (
+                            char.isspace()
+                            or unicodedata.category(char).startswith("P")
+                        )
+                        for char in piece
+                    )
+                    strength = 1.0 if body_length > 1 else 0.2
+                    breaks[token_index] = max(
+                        breaks.get(token_index, 0.0), strength
+                    )
+    except (ImportError, RuntimeError, ValueError):
+        pass
+
+    for index, span in enumerate(token_spans[:-1], 1):
+        boundary = span[1]
+        left = text[:boundary].rstrip()
+        right = text[boundary:].lstrip()
+        strength = 0.0
+        if left and left[-1] in ".!?。！？;；":
+            strength = 4.0
+        elif left and unicodedata.category(left[-1]).startswith("P"):
+            strength = 2.0
+        elif (
+            text[boundary - 1 : boundary].isspace()
+            or text[boundary : boundary + 1].isspace()
+        ):
+            strength = 1.5
+        elif left and right and left[-1].isascii() != right[0].isascii():
+            strength = 1.0
+        if strength:
+            breaks[index] = max(breaks.get(index, 0.0), strength)
+    return breaks
+
+
+def _balanced_subtitle_ranges(
+    text, token_spans, timestamps, max_duration_ms, max_chars
+):
+    """Find the fewest valid cues, then optimize their readable boundaries."""
+    token_count = len(token_spans)
+    if not token_count:
+        return []
+
+    total_chars = len(text.strip())
+    total_duration = sum(timestamp[1] - timestamp[0] for timestamp in timestamps)
+    min_cues = max(1, (total_chars + max_chars - 1) // max_chars)
+    break_weights = _subtitle_break_weights(text, token_spans)
+
+    # Dynamic programming avoids the short final fragment produced by a greedy split.
+    for cue_count in range(min_cues, token_count + 1):
+        target_chars = total_chars / cue_count
+        target_duration = total_duration / cue_count
+        states = {0: (0.0, [])}
+        for cue_index in range(cue_count):
+            next_states = {}
+            cues_left = cue_count - cue_index - 1
+            for token_start, (cost, path) in states.items():
+                min_end = token_start + 1
+                max_end = token_count - cues_left
+                for token_end in range(min_end, max_end + 1):
+                    cue_text = text[
+                        token_spans[token_start][0] : token_spans[token_end - 1][1]
+                    ].strip()
+                    cue_duration = timestamps[token_end - 1][1] - timestamps[token_start][0]
+                    if len(cue_text) > max_chars or cue_duration > max_duration_ms:
+                        if token_end > min_end:
+                            break
+                        continue
+
+                    break_strength = break_weights.get(token_end)
+                    unsafe_break = token_end < token_count and break_strength is None
+                    char_error = (len(cue_text) - target_chars) / max(target_chars, 1.0)
+                    duration_error = (cue_duration - target_duration) / max(
+                        target_duration, 1.0
+                    )
+                    gap_ms = (
+                        timestamps[token_end][0] - timestamps[token_end - 1][1]
+                        if token_end < token_count
+                        else 0
+                    )
+                    cue_cost = (
+                        (1000.0 if unsafe_break else 0.0)
+                        + 8.0 * char_error * char_error
+                        + 2.0 * duration_error * duration_error
+                        - 2.0 * (break_strength or 0.0)
+                        - min(max(gap_ms, 0), 1000) / 1000.0
+                    )
+                    candidate = (cost + cue_cost, [*path, (token_start, token_end)])
+                    previous = next_states.get(token_end)
+                    if previous is None or candidate[0] < previous[0]:
+                        next_states[token_end] = candidate
+            states = next_states
+            if not states:
+                break
+
+        if token_count in states:
+            return states[token_count][1]
+    return []
+
+
+def _sentence_timestamp_words(result):
+    sentence_info = result.get("sentence_info", []) or []
+    words = result.get("words", []) or []
+    raw_timestamps = result.get("timestamp") or result.get("timestamps") or []
+    timestamps = [_timestamp_pair(item) for item in raw_timestamps]
+    if not words or len(words) != len(timestamps) or not _timestamps_are_ordered(
+        timestamps
+    ):
+        return [None] * len(sentence_info)
+
+    mapped_words = []
+    cursor = 0
+    for sentence in sentence_info:
+        local_timestamps = [
+            _timestamp_pair(item)
+            for item in (
+                sentence.get("timestamp") or sentence.get("timestamps") or []
+            )
+        ]
+        if not _timestamps_are_ordered(local_timestamps):
+            mapped_words.append(None)
+            continue
+
+        local_cursor = cursor
+        selected = []
+        for timestamp in local_timestamps:
+            while (
+                local_cursor < len(timestamps)
+                and timestamps[local_cursor] != timestamp
+            ):
+                local_cursor += 1
+            if local_cursor == len(timestamps):
+                selected = []
+                break
+            selected.append(words[local_cursor])
+            local_cursor += 1
+        if len(selected) == len(local_timestamps):
+            mapped_words.append(selected)
+            cursor = local_cursor
+        else:
+            mapped_words.append(None)
+    return mapped_words
+
+
+def _split_subtitle_segment(segment, max_duration_ms, max_chars):
+    text = str(segment.get("text", ""))
+    start = int(segment.get("start", 0) or 0)
+    end = int(segment.get("end", start) or start)
+    if not text or (end - start <= max_duration_ms and len(text) <= max_chars):
+        return [dict(segment)]
+
+    raw_timestamps = segment.get("timestamp") or segment.get("timestamps") or []
+    timestamps = [_timestamp_pair(item) for item in raw_timestamps]
+    if not _timestamps_are_ordered(timestamps):
+        return [dict(segment)]
+
+    words = segment.get("words") or []
+    token_spans = (
+        _subtitle_word_spans(text, words) if words else _subtitle_token_spans(text)
+    )
+    if not timestamps or len(timestamps) != len(token_spans):
+        return [dict(segment)]
+    for index, span in enumerate(token_spans):
+        token_text = text[span[0] : span[1]].strip()
+        if (
+            timestamps[index][1] - timestamps[index][0] > max_duration_ms
+            or len(token_text) > max_chars
+        ):
+            return [dict(segment)]
+
+    ranges = _balanced_subtitle_ranges(
+        text, token_spans, timestamps, max_duration_ms, max_chars
+    )
+    if not ranges:
+        return [dict(segment)]
+
+    cues = []
+    for token_start, token_end in ranges:
+        cue = dict(segment)
+        cue["text"] = text[
+            token_spans[token_start][0] : token_spans[token_end - 1][1]
+        ].strip()
+        cue["start"] = timestamps[token_start][0]
+        cue["end"] = timestamps[token_end - 1][1]
+        cue["timestamp"] = timestamps[token_start:token_end]
+        cue.pop("timestamps", None)
+        cue.pop("words", None)
+        cues.append(cue)
+
+    return cues
+
+
 def merge_subtitle_segments(
     segments, max_gap_ms=500, max_duration_ms=8000, max_chars=42
 ):
@@ -107,6 +436,22 @@ def merge_subtitle_segments(
         for item in group[1:]:
             text = _join_subtitle_text(text, item.get("text", ""))
         cue["text"] = text
+        if any(item.get("timestamp") for item in group):
+            cue["timestamp"] = [
+                timestamp
+                for item in group
+                for timestamp in item.get("timestamp", [])
+            ]
+        if len(group) > 1 and any(item.get("words") for item in group):
+            if all(
+                isinstance(item.get("words"), list)
+                and item["words"]
+                and len(item["words"]) == len(item.get("timestamp", []))
+                for item in group
+            ):
+                cue["words"] = [word for item in group for word in item["words"]]
+            else:
+                cue.pop("words", None)
         return cue
 
     def pack(chain):
@@ -130,11 +475,13 @@ def merge_subtitle_segments(
     merged = []
     chain = []
     for source in segments:
-        current = dict(source)
-        if chain and not can_follow(chain[-1], current):
-            merged.extend(pack(chain))
-            chain = []
-        chain.append(current)
+        for current in _split_subtitle_segment(
+            source, max_duration_ms=max_duration_ms, max_chars=max_chars
+        ):
+            if chain and not can_follow(chain[-1], current):
+                merged.extend(pack(chain))
+                chain = []
+            chain.append(current)
     if chain:
         merged.extend(pack(chain))
     return merged
@@ -313,8 +660,20 @@ def main():
         text = clean_text(result[0].get("text", ""))
         segments = []
         if "sentence_info" in result[0]:
-            for seg in result[0]["sentence_info"]:
-                s = {"start": seg.get("start", 0), "end": seg.get("end", 0), "text": clean_text(seg.get("sentence") or seg.get("text", ""))}
+            sentence_words = _sentence_timestamp_words(result[0])
+            for index, seg in enumerate(result[0]["sentence_info"]):
+                s = {
+                    "start": seg.get("start", 0),
+                    "end": seg.get("end", 0),
+                    "text": clean_text(seg.get("sentence") or seg.get("text", "")),
+                    "timestamp": seg.get("timestamp") or seg.get("timestamps"),
+                }
+                if (
+                    args.output_format == "srt"
+                    and args.subtitle_segment_mode == "readable"
+                    and sentence_words[index]
+                ):
+                    s["words"] = sentence_words[index]
                 if args.spk and "spk" in seg:
                     s["speaker"] = seg["spk"]
                 segments.append(s)

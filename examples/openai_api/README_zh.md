@@ -2,16 +2,34 @@
 
 # FunASR OpenAI 兼容 API 服务
 
-FunASR OpenAI 兼容 API 提供 `/v1/audio/transcriptions`，可作为私有语音转写服务接入 OpenAI 风格 SDK、Agent 框架、Dify、n8n、HTTP 节点和内部业务系统。
+FunASR OpenAI 兼容 API 提供 `/v1/audio/transcriptions`，可作为私有语音转写服务接入 OpenAI 风格 SDK 或 multipart HTTP 客户端。它实现的是语音接口子集，不是完整 OpenAI API，也不保证兼容所有 SDK/框架功能。
+
+本页启动仓库中的[示例服务](server.py)。打包的 `funasr-server` 是[另一套实现](../../funasr/bin/_server_app.py)，复用配置前请先看[接口边界](#api-contract)。如果需要进程内 `AutoModel.generate()` 而非 HTTP 请求，请查看 [Python SDK 指南](../../docs/python_api_zh.md)（[English](../../docs/python_api.md)）。
+
+## API Contract
+
+| 入口 | 启动预加载模型 | 省略 multipart `model` 时 | 说话人开关 |
+|---|---|---|---|
+| 在本目录运行 `python server.py` | `sensevoice` | `sensevoice` | 没有 `spk` 表单字段，只保留模型本身已经返回的说话人标签。 |
+| `funasr-server` | `--model auto`：设备字符串以 `cuda` 开头时选 `fun-asr-nano`，否则选 `sensevoice` | `fun-asr-nano` | `spk=true` 为非原生说话人模型请求单独的说话人处理，默认 `False`。 |
+
+每次请求都应明确指定 `model`：启动预加载与请求默认值是不同设置。请查询实际服务的 `/v1/models`；例如 `paraformer-en` 在示例服务中注册，却不是打包服务的内置别名。表单字段应以运行中服务的 `/openapi.json` 核对，不能只依赖仓库中的[示例规范](OPENAPI_zh.md)。
+
+`response_format=verbose_json` 只选择响应格式，**不会启用说话人分离，也不会强制生成时间戳**。此示例仅在模型返回 `sentence_info` 时将其转换为 `segments`，否则返回 `segments=[]`。说话人标签可能缺失或为 null。MOSS 原生输出匿名标签，不需要 `spk=true` 或外部 VAD/CAM++。
+
+此示例的 `duration` 是 `generate()` 调用的耗时，单位为秒，不包含初次模型加载，**不是音频时长**。打包服务的 verbose 响应使用秒单位的音频时长，其 fallback 在无法读取音频元数据时可能使用 0。两套服务的片段 `start`/`end` 均为秒。打包服务的 fallback 可能根据文本与音频时长生成粗粒度片段，并非逐词强制对齐。打包服务的 verbose 结构包含 `task` 及片段 `id`/`words`，示例服务则包含 `model`，不能假设 JSON 字段完全相同。参见[响应示例与说话人请求](CLIENTS.md#api-contract)。
 
 ## 快速开始
 
+从仓库根目录执行：
+
 ```bash
 pip install funasr fastapi uvicorn python-multipart
+cd examples/openai_api
 python server.py --model sensevoice --device cuda --port 8000
 ```
 
-服务通常会在模型加载后启动。健康检查：`GET /health`。
+模型加载后再检查 `GET /health`；下载及启动耗时取决于 checkpoint、缓存、网络和硬件。除非另有说明，下文命令均在本目录执行。
 
 需要直接复制的接入示例？可以继续查看 [客户端配方](CLIENTS.md)、[JavaScript/TypeScript 配方](JAVASCRIPT_zh.md)、[Gradio 浏览器 Demo](GRADIO_zh.md)、[工作流配方](WORKFLOWS_zh.md)、[Postman 集合](POSTMAN_zh.md)、[OpenAPI 规范](OPENAPI_zh.md)、[安全与网关指南](SECURITY_zh.md) 和 [Kubernetes 部署模板](kubernetes/README_zh.md)。
 
@@ -49,6 +67,8 @@ python gradio_app.py --base-url http://localhost:8000
 
 ## 使用 OpenAI SDK
 
+先运行 `pip install openai` 安装独立的 HTTP 客户端；它不是 FunASR Python SDK。
+
 ```python
 from openai import OpenAI
 
@@ -65,7 +85,8 @@ verbose = client.audio.transcriptions.create(
     file=open("meeting.wav", "rb"),
     response_format="verbose_json",
 )
-print(verbose.segments)
+# verbose_json does not enable diarization; segments may be empty
+print(getattr(verbose, "segments", []))
 ```
 
 ## 使用 curl
@@ -83,12 +104,21 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 ## 可用模型
 
-| Model | GPU 速度 | CPU 速度 | 语言 | 特性 |
-|---|---|---|---|---|
-| `sensevoice` | 170x realtime | 17x realtime | zh/en/ja/ko/yue | 情感与事件标签 |
-| `paraformer` | 120x realtime | 15x realtime | zh/en | 标点恢复 |
-| `paraformer-en` | 120x realtime | 15x realtime | en | 英文识别 |
-| `fun-asr-nano` | 17x realtime | 3.6x realtime | 中/英/日 + 中文方言/口音 | LLM-based，时间戳 |
+下列别名来自此示例的 `MODEL_CONFIGS`，不是整个 SDK 或所有服务统一支持的模型列表。接口会去除返回文本中的 `<|...|>` 富文本标签，不会输出独立的情感/事件字段。
+
+| Model | 示例配置 | 响应限制 |
+|---|---|---|
+| `sensevoice` | SenseVoiceSmall + FSMN-VAD | 默认不启用句子时间戳或外部说话人聚类。 |
+| `paraformer` | `paraformer-zh` + FSMN-VAD + CT 标点 | 已配置标点；仅设置 `verbose_json` 不会请求句子记录。 |
+| `paraformer-en` | `paraformer-en` + FSMN-VAD | 相对于打包服务，这是示例专有别名；此处没有配置标点组件。 |
+| `fun-asr-nano` | `AutoModel` 加载 Fun-ASR-Nano，HF 平台 + FSMN-VAD | 此示例不使用 vLLM；CTC 时间戳依赖完整 checkpoint 权重。 |
+| `moss-transcribe-diarize` | 第三方 OpenMOSS 原生转写/说话人适配器 | 需要独立依赖环境；保留模型返回的时间戳与匿名标签。 |
+
+具体 checkpoint 的语言与许可证信息请查看[模型选择](../../docs/model_selection_zh.md) 和模型自身许可证。FunASR 软件的 MIT 许可证不代表所有模型权重的许可证。请在实际工作负载上测量所选路线，不应把别名当作统一的速度或容量规格。
+
+MOSS 使用固定 revision 的第三方 HF 模型，不能外挂 VAD 或说话人模型。完整的
+`funasr-server`、Docker Compose、Kubernetes、vLLM、SGLang Omni、LocalAI 与
+FunClip 路径见 [MOSS 部署指南](../../docs/moss_transcribe_diarize_zh.md)。
 
 ## API 端点
 
@@ -103,7 +133,7 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 ## Agent 与低代码工作流
 
-适用场景包括 **LangChain**、**LlamaIndex**、**AutoGen**、**CrewAI**、**Semantic Kernel**、**Dify**、**n8n** 和任何支持 OpenAI audio API 或 multipart HTTP 的系统。
+可以通过 multipart HTTP 或工具函数模式接入 **LangChain**、**LlamaIndex**、**AutoGen**、**CrewAI**、**Semantic Kernel**、**Dify**、**n8n**，但应按本服务支持的字段验证具体集成。这些示例不保证兼容每个框架版本或实时 API。
 
 - SDK、JavaScript/TypeScript 和 Agent tool 写法见 [客户端配方](CLIENTS.md) 与 [JavaScript/TypeScript 配方](JAVASCRIPT_zh.md)。
 - Dify、n8n、HTTP 节点和 webhook worker 见 [工作流配方](WORKFLOWS_zh.md)。
@@ -112,7 +142,7 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 ## Docker 部署
 
-默认镜像以 CPU 模式启动，适合作为可复现 smoke test。
+从仓库根目录执行下列命令。默认镜像以 CPU 模式启动示例 `server.py`，不是打包的 `funasr-server`。
 
 ```bash
 cd examples/openai_api
@@ -160,6 +190,8 @@ python smoke_test.py --base-url http://localhost:8000
 
 ## 配置
 
+以下默认值属于示例 `server.py`，不属于 `funasr-server`；参见[接口边界](#api-contract)。
+
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--host` | `0.0.0.0` | 监听地址 |
@@ -183,4 +215,4 @@ Docker 环境变量：
 | 8000 端口被占用 | 改用 `--port 9000`，并运行 `BASE_URL=http://localhost:9000 bash smoke_test.sh` 或 `python smoke_test.py --base-url http://localhost:9000`。 |
 | 模型下载很慢 | 换稳定网络，或提前从 ModelScope/Hugging Face 下载模型。 |
 | Dify/n8n 容器里访问 `localhost` 失败 | 使用工作流运行时可访问的主机名、Compose service name 或 Kubernetes service name。 |
-| 响应中没有 `segments` | 设置 `response_format=verbose_json`。 |
+| 响应中没有 `segments` | 设置 `response_format=verbose_json` 可选择包含该字段的响应格式；数组仍可能为空，它不会启用时间戳或说话人分离。参见[接口边界](#api-contract)。 |

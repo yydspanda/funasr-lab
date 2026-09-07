@@ -14,7 +14,7 @@ import sys
 import os
 import re
 
-from funasr.cli import merge_subtitle_segments
+from funasr.cli import _sentence_timestamp_words, merge_subtitle_segments
 
 
 def clean_text(text):
@@ -73,6 +73,13 @@ def main():
     )
     parser.add_argument("--model", default="iic/SenseVoiceSmall")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--max-single-segment-time",
+        type=int,
+        default=60000,
+        metavar="MS",
+        help="Maximum VAD segment length in milliseconds (default: 60000)",
+    )
     parser.add_argument("--spk", action="store_true", help="Include speaker labels")
     parser.add_argument("--lang", default="auto")
     args = parser.parse_args()
@@ -88,7 +95,7 @@ def main():
     from funasr import AutoModel
 
     kwargs = {"model": args.model, "vad_model": "fsmn-vad", "punc_model": "ct-punc",
-              "vad_kwargs": {"max_single_segment_time": 30000},
+              "vad_kwargs": {"max_single_segment_time": args.max_single_segment_time},
               "device": args.device, "disable_update": True}
     if args.spk:
         kwargs["spk_model"] = "cam++"
@@ -112,12 +119,22 @@ def main():
 
     segments = []
     result_item = result[0]
-    for seg in result_item.get("sentence_info", []) or []:
+    sentence_words = _sentence_timestamp_words(result_item)
+    for index, seg in enumerate(result_item.get("sentence_info", []) or []):
         text = clean_text(seg.get("sentence") or seg.get("text", ""))
         start = int(seg.get("start", 0) or 0)
         end = int(seg.get("end", 0) or 0)
         if text and end > start:
-            segments.append({"start": start, "end": end, "text": text, "spk": seg.get("spk")})
+            item = {
+                "start": start,
+                "end": end,
+                "text": text,
+                "spk": seg.get("spk"),
+                "timestamp": seg.get("timestamp") or seg.get("timestamps"),
+            }
+            if sentence_words[index]:
+                item["words"] = sentence_words[index]
+            segments.append(item)
 
     if not segments:
         text = clean_text(result_item.get("text", ""))

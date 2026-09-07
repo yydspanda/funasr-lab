@@ -51,31 +51,41 @@ def test_vllm_contract_tracks_native_funasr_release_and_h100_validation(valid_re
 
     assert entry['maturity'] == 'community-verified'
     assert entry['tested'] == {
-        'funasr': 'Fun-ASR-Nano-2512 conversion@e718b36e',
-        'runtime': 'vLLM 0.27.1+cu129 / Torch 2.13.0+cu129',
-        'verified': '2026-08-13',
+        'funasr': 'Official model revision a4362c943d48951f98ca2a62181cc028970270c5; not a FunASR package version',
+        'runtime': 'vLLM 0.27.1+cu129 / Torch 2.13.0+cu129 / Transformers 5.15.0 / CUDA 12.9 / Python 3.12.3',
+        'verified': '2026-09-07',
     }
-    assert entry['models'] == ['Fun-ASR-Nano-2512 (community vLLM conversion)']
+    assert entry['models'] == ['FunAudioLLM/Fun-ASR-Nano-2512-vllm (official checkpoint)']
     install = '\n'.join(entry['commands']['install'])
-    assert 'vllm[audio]' in install
-    assert 'vllm-0.27.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl' in install
-    assert 'bf0d52faa2a51e7a01c6856a7a8a2d1307fd0ff711415d34168a67ffac0fa47b' in install
+    for marker in ('snapshot_download', 'FunAudioLLM/Fun-ASR-Nano-2512-vllm',
+                   'a4362c943d48951f98ca2a62181cc028970270c5', '5.15.0',
+                   '2.13.0+cu129', '0.27.1+cu129', 'local_dir=', 'cache_dir='):
+        assert marker in install
+    assert 'pip install' not in install
+    assert 'uv venv' not in install
     launch = '\n'.join(entry['commands']['launch'])
     for marker in (
-        'vllm serve allendou/Fun-ASR-Nano-2512-vllm',
-        '--revision e718b36e2578203ec893e9b488239225f8d668e2',
-        '--served-model-name fun-asr-nano',
+        '-m vllm.entrypoints.openai.api_server',
+        '--model "$MODEL_DIR"',
+        'HF_HUB_OFFLINE=1', 'TRANSFORMERS_OFFLINE=1',
+        '--host 127.0.0.1', '--port 57185',
+        '--served-model-name fun-asr-nano-official-a4362c94',
         '--dtype float32',
         '--gpu-memory-utilization 0.40',
+        '--enforce-eager',
     ):
         assert marker in launch
+    assert 'allendou' not in launch
     smoke = '\n'.join(entry['commands']['smoke'])
     assert '/v1/audio/transcriptions' in smoke
-    assert 'language=zh' in smoke
+    for language in ('zh', 'en', 'ja'):
+        assert f'language={language}' in smoke
     assert 'hotwords=开放时间,开放时间,开放时间' in smoke
     evidence_urls = {item['url'] for item in entry['evidence']}
     for url in (
         'https://github.com/modelscope/FunASR/blob/main/docs/vllm_native_funasr_validation.md',
+        'https://github.com/modelscope/FunASR/blob/main/docs/vllm_official_native_validation.md',
+        'https://github.com/modelscope/FunASR/blob/main/docs/vllm_official_native_validation_zh.md',
         'https://github.com/vllm-project/vllm/releases/tag/v0.27.1',
         'https://github.com/vllm-project/vllm/pull/33247',
         'https://github.com/vllm-project/vllm/pull/39674',
@@ -93,7 +103,12 @@ def test_vllm_contract_tracks_native_funasr_release_and_h100_validation(valid_re
     )
     limitation = entry['translations']['en']['primary_limitation'].lower()
     assert 'community-converted checkpoint' in limitation
-    assert 'official funasr split-engine' in limitation
+    assert 'official funaudiollm/fun-asr-nano-2512-vllm' in limitation
+    assert 'existing environment' in limitation
+    assert 'not a clean installation' in limitation
+    assert '2026-08-13' in limitation
+    assert 'v0.28.0' in limitation
+    assert 'https://github.com/vllm-project/vllm/pull/54944' in evidence_urls
 
 
 def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_registry):
@@ -107,12 +122,45 @@ def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_regi
         'OpenMOSS-Team/MOSS-Transcribe-Diarize (third-party Apache-2.0 model)'
     ]
     assert entry['tested'] == {
-        'funasr': 'AutoModel diarized_json adapter; third-party model@e8681d68',
-        'runtime': 'vLLM 0.27.1 / Torch 2.13.0+cu129 / H100 80GB',
-        'verified': '2026-08-30',
+        'funasr': 'AutoModel HF + vLLM + SGLang adapters and OpenAI HTTP service; third-party model@e8681d68',
+        'runtime': 'Transformers 5.16.0.dev0 + Torch 2.11.0+cu130 and vLLM 0.27.1 + Torch 2.13.0+cu129 / H100 80GB',
+        'verified': '2026-09-01',
     }
     assert 'LocalAI / moss-transcribe.cpp' in entry['interfaces']
     assert {'cpu', 'desktop-edge-gpu'} <= set(entry['hardware'])
+
+    runtime_paths = {path['id']: path for path in entry['runtime_paths']}
+    assert set(runtime_paths) == {'funasr-server', 'vllm', 'sglang-omni'}
+    service_commands = '\n'.join(
+        command
+        for group in ('install', 'launch', 'health', 'smoke')
+        for command in runtime_paths['funasr-server']['commands'][group]
+    )
+    assert 'funasr-server --model moss-transcribe-diarize' in service_commands
+    assert 'docker-compose.moss.yml' in service_commands
+    assert 'response_format=verbose_json' in service_commands
+    assert 'real HTTP response verified 2026-09-01' in runtime_paths['funasr-server']['tested']
+    assert runtime_paths['vllm']['tested'] == (
+        'vLLM 0.27.1 / Torch 2.13.0+cu129 / H100 80GB; FunASR adapter verified'
+    )
+    assert runtime_paths['sglang-omni']['tested'] == (
+        'SGLang Omni 3f819f9c / FunASR adapter contract-tested / #914 H100 upstream benchmark'
+    )
+
+    sglang_commands = '\n'.join(
+        command
+        for group in ('install', 'launch', 'health', 'smoke')
+        for command in runtime_paths['sglang-omni']['commands'][group]
+    )
+    assert 'git checkout 3f819f9cdae3d4eeec22f73306c9067a1ec2542e' in sglang_commands
+    assert 'sgl-omni serve' in sglang_commands
+    assert '--model-path .models/moss-transcribe-diarize' in sglang_commands
+    assert 'response_format=verbose_json' in sglang_commands
+    assert "payload.get('segments'" in sglang_commands
+    assert "from funasr import AutoModel" in sglang_commands
+    assert "backend='sglang'" in sglang_commands
+    assert "sglang_base_url='http://127.0.0.1:8898/v1'" in sglang_commands
+    assert 'max_new_tokens=65536' in sglang_commands
 
     install = '\n'.join(entry['commands']['install'])
     assert 'vllm[audio]' in install
@@ -153,6 +201,7 @@ def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_regi
     ) in evidence_urls
     assert 'https://github.com/localai-org/moss-transcribe.cpp' in evidence_urls
     assert 'https://github.com/mudler/LocalAI' in evidence_urls
+    assert 'https://github.com/sgl-project/sglang-omni/pull/914' in evidence_urls
 
     english = entry['translations']['en']
     assert 'OpenMOSS' in english['summary']
@@ -166,6 +215,8 @@ def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_regi
     assert 'diarized_json' in english['operations'][-1]
     assert 'diarized_json' in english['troubleshooting'][-1]
     assert 'internal segmentation' in english['primary_limitation']
+    assert 'not a FunASR AutoModel backend' not in english['primary_limitation']
+    assert 'SGLang Omni' in english['operations'][-1]
     assert 'FunASR model' in english['primary_limitation']
     assert any('LocalAI' in item and 'GGUF' in item for item in english['fit'])
     assert not any(
@@ -181,13 +232,21 @@ def test_moss_transcribe_diarize_contract_tracks_third_party_upstream(valid_regi
         and 'contract smoke' in benchmark['qualification']
         for benchmark in entry['benchmarks']
     )
+    assert any(
+        benchmark['runtime'] == 'SGLang Omni merge 8458f76a'
+        and benchmark['hardware'] == 'NVIDIA H100 80GB'
+        and '1088 / 1088' in benchmark['result']
+        and 'diarization/timestamp correctness is not evaluated' in benchmark['qualification']
+        and benchmark['source'] == 'https://github.com/sgl-project/sglang-omni/pull/914'
+        for benchmark in entry['benchmarks']
+    )
 
 
 def test_audio_cpp_contract_tracks_mainline_nano_and_sensevoice(valid_registry):
     entry = next(item for item in valid_registry['deployments'] if item['id'] == 'audio-cpp')
     llama_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'llama-cpp')
 
-    assert valid_registry['verified'] == '2026-08-30'
+    assert valid_registry['verified'] == '2026-09-01'
     assert entry['maturity'] == 'community-verified'
     assert entry['selector_rank'] > llama_cpp['selector_rank']
     assert entry['tested'] == {
@@ -356,7 +415,7 @@ def test_sensevoice_native_server_contract_tracks_merged_runtime(valid_registry)
     llama_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'llama-cpp')
     audio_cpp = next(item for item in valid_registry['deployments'] if item['id'] == 'audio-cpp')
 
-    assert valid_registry['verified'] == '2026-08-30'
+    assert valid_registry['verified'] == '2026-09-01'
     assert entry['maturity'] == 'production-verified'
     assert llama_cpp['selector_rank'] < entry['selector_rank'] < audio_cpp['selector_rank']
     assert entry['tested'] == {
@@ -442,6 +501,26 @@ def test_evidence_must_be_https(valid_registry):
     data['deployments'][0]['evidence'][0]['url'] = 'http://example.com/evidence'
 
     assert any('evidence URL must use https' in error for error in validate_registry(data))
+
+
+def test_runtime_paths_require_unique_ids_translations_and_commands(valid_registry):
+    data = copy.deepcopy(valid_registry)
+    entry = next(
+        item for item in data['deployments']
+        if item['id'] == 'moss-transcribe-diarize'
+    )
+    entry['runtime_paths'][2]['id'] = 'vllm'
+    del entry['runtime_paths'][1]['translations']['en']['summary']
+    del entry['runtime_paths'][2]['commands']['health']
+
+    errors = validate_registry(data)
+
+    assert 'moss-transcribe-diarize: duplicate runtime path id vllm' in errors
+    assert (
+        'moss-transcribe-diarize: runtime path vllm translations.en.summary is required'
+        in errors
+    )
+    assert 'moss-transcribe-diarize: runtime path vllm commands.health is required' in errors
 
 
 def test_benchmark_requires_reproducibility_fields(valid_registry):

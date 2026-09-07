@@ -5,12 +5,14 @@
 本文把第三方
 [OpenMOSS/MOSS-Transcribe-Diarize](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize)
 模型接入 FunASR 部署生态。模型由 OpenMOSS 以 Apache-2.0 发布，不是 FunASR
-自有模型。FunASR 只为其公开的 Transformers 与 vLLM 接口提供适配器，并保留
-OpenMOSS 模型名称、许可证和上游 revision。
+自有模型。FunASR 为其公开的 Transformers、vLLM 与 SGLang Omni 接口提供适配器，
+并保留 OpenMOSS 模型名称、许可证和上游 revision。
 
 MOSS-Transcribe-Diarize 会联合生成转写、时间戳和 `[S01]` 等说话人标签，应用侧
 不必再拼接外部 VAD、ASR 和 diarization 管线。这里描述的是部署形态，不表示模型
 内部没有分块或分段。
+这些是单次录音内的匿名说话人标签：`[S01]` 不能识别已知人物，不做已注册声纹
+验证，也不保证与另一段录音中的 `[S01]` 是同一个人。
 
 ## 固定上游版本
 
@@ -28,8 +30,8 @@ MOSS-Transcribe-Diarize 会联合生成转写、时间戳和 `[S01]` 等说话�
 ## FunASR AutoModel 契约
 
 本地后端应使用隔离的 Python 3.10+ 环境，并安装 Transformers 5.6 或更新版本。
-MOSS 在一次生成中完成长音频转写与说话人识别，因此不要传 `vad_model` 或
-`spk_model`。外部 VAD 会把长音频切开，并破坏跨分块的全局说话人身份。
+MOSS 在一次生成中完成长音频转写与说话人分离，因此不要传 `vad_model` 或
+`spk_model`。外部 VAD 会把长音频切开，并破坏跨分块的匿名标签一致性。
 
 ```python
 from funasr import AutoModel
@@ -84,6 +86,52 @@ speaker `segments` 直接映射到 `sentence_info`。认证可通过 `vllm_api_k
 `vllm_response_format="diarized_json"`。为保持已有客户端兼容，默认值仍是 `json`，
 此时 `raw_text` 保留原始标签生成；结构化模式下，`raw_text` 是 vLLM 返回的清理后
 `text`，权威说话人信息位于 `sentence_info`。
+
+## FunASR OpenAI 兼容服务
+
+内置离线 HTTP 服务通过 `/v1/audio/transcriptions` 返回同一套标准化结果。
+服务加载固定的 Transformers revision，不会外挂 VAD 或第二套说话人模型：
+
+```bash
+python -m pip install "transformers>=5.6,<6" fastapi uvicorn python-multipart
+funasr-server --model moss-transcribe-diarize --device cuda:0 --port 8000
+
+curl -fsS http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F file=@meeting.wav \
+  -F model=moss-transcribe-diarize \
+  -F response_format=verbose_json
+```
+
+响应包含 `text`、音频 `duration`，以及带 `start`、`end`、`text` 和匿名
+`speaker` 标签的 `segments`。请求不需要设置 `spk=true`；即使通用客户端传入
+该字段，服务也只使用 MOSS 原生标签，不会启动第二套说话人流水线。
+
+### Open WebUI
+
+[Open WebUI](https://github.com/open-webui/open-webui) 可将该服务配置为 OpenAI
+兼容的语音转写提供方。在 **Admin Panel > Settings > Audio** 中选择 OpenAI STT
+engine，将 **OpenAI API Base URL** 设为 `http://funasr:8000/v1`（或可访问的主机
+地址），模型选择 `moss-transcribe-diarize`，请求格式保持 `multipart`。Open WebUI
+会把模型、可选语言和完整音频文件提交到 `/v1/audio/transcriptions`。
+
+MOSS 仍是离线长音频模型：这里提供的是 Open WebUI 文件转写，不是实时麦克风或
+WebSocket 说话人分离路径。
+
+GPU 容器可在仓库根目录使用
+`examples/openai_api/docker-compose.moss.yml` 构建。Kubernetes 运维可构建同一
+`funasr-moss-api:local` 镜像，再应用
+`examples/openai_api/kubernetes/funasr-moss-api.yaml`；上线前应将本地镜像名
+替换为内部镜像仓库的不可变 digest。
+
+MOSS 是离线长音频模型，不接入 FunASR 的实时 WebSocket 服务；完整文件请使用
+HTTP 接口。FunClip 通过同一套 `sentence_info` 契约生成带说话人信息的字幕与
+片段。
+
+内置服务路径已在一张 H100 80GB、Transformers `5.16.0.dev0`、Torch
+`2.11.0+cu130` 环境复现。固定 revision 的模型通过真实 HTTP 接口处理仓库自带
+6.000 秒样例（`ea03e1f473ad1618a03da3327a545369cb8f6f06cb0f4115535e5a866167d47e`），
+返回一个非空、时间单调且标记为 `S01` 的 segment，`duration=6.0`。这只是服务
+契约 smoke test，不代表准确率、吞吐、并发或生产容量。
 
 ## 选择服务后端
 
@@ -232,6 +280,15 @@ LocalAI `master@a7cc5873ef5b7c909fc9ff7d349d51738ba9bb05` 已包含
 按固定上游 SGLang Omni 安装指南准备 CUDA 13 环境，然后下载不可变模型快照并从本地目录启动：
 
 ```bash
+git clone https://github.com/sgl-project/sglang-omni.git
+git -C sglang-omni checkout 3f819f9cdae3d4eeec22f73306c9067a1ec2542e
+```
+
+该源码 pin 已把 `max_new_tokens` 传入 transcription 生成请求。最初的 #914
+merge 早于这个请求字段，因此虽然它的 H100 benchmark 仍可作为上游证据，却不能
+支撑下方长音频命令。
+
+```bash
 hf download OpenMOSS-Team/MOSS-Transcribe-Diarize \
   --revision e8681d68e7042738ffca8ac8212bc8fcb1131ab8 \
   --local-dir .models/moss-transcribe-diarize
@@ -253,7 +310,39 @@ curl -fsS http://127.0.0.1:8898/v1/audio/transcriptions \
   -F response_format=verbose_json
 ```
 
-接入字幕、会议纪要或分析系统前，验证每个 segment 都包含起止时间、文本和预期的 speaker 字段。
+验证每个 segment 都有起止时间与非空文本。SGLang Omni 当前的
+`verbose_json` 合同把说话人编号保留为 `segments[].text` 的 `[Sxx]` 前缀，
+并没有单独的 `speaker` 字段。接入字幕、会议纪要或分析系统前，应解析并校验此前缀。
+
+FunASR 适配器会完成该校验，并把 SGLang 官方 segments 映射为与 HF、vLLM
+一致的 `sentence_info` 合同：
+
+```python
+from funasr import AutoModel
+
+model = AutoModel(
+    model="OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    backend="sglang",
+    sglang_base_url="http://127.0.0.1:8898/v1",
+    sglang_model="OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    max_new_tokens=65536,
+    disable_update=True,
+)
+result = model.generate(input="audio.wav", max_new_tokens=65536)[0]
+for segment in result["sentence_info"]:
+    print(segment["start"], segment["end"], segment["spk"], segment["text"])
+```
+
+不要传入 `vad_model` 或 `spk_model`：MOSS 在一次生成中联合完成分段和匿名说话人
+归属，外部分段会破坏长轮次中的说话人一致性。适配器把上游带标签原文保存在
+`raw_text`，只从标准化 segment 中移除已经校验的 `[Sxx]` 前缀；如果 SGLang
+没有返回此前缀，则明确失败，不会伪造说话人标签。
+
+原生 runtime 已通过 SGLang Omni
+[#914](https://github.com/sgl-project/sglang-omni/pull/914) 合并。其单张 H100
+Seed-TTS EN benchmark 完成 1088/1088 条请求且无请求失败。WER 是在移除
+timestamp 与 speaker markup 后针对单说话人英文片段计算的，因此不评估
+diarization 或 timestamp 准确率，也不是生产容量承诺。
 
 ## 上线前验证
 

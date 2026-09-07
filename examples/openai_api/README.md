@@ -2,16 +2,34 @@
 
 # FunASR OpenAI-Compatible API Server
 
-Drop-in replacement for OpenAI's `/v1/audio/transcriptions` endpoint. Works with **any agent framework** that supports OpenAI audio API.
+An OpenAI-style `/v1/audio/transcriptions` endpoint for private speech transcription. This example implements a speech API subset, not the entire OpenAI API or a compatibility guarantee for every SDK/framework feature.
+
+This page starts the repository's [example server](server.py). The packaged `funasr-server` is a [different implementation](../../funasr/bin/_server_app.py); see [API boundaries](#api-contract) before reusing its settings. For in-process `AutoModel.generate()` rather than HTTP requests, use the [Python SDK guide](../../docs/python_api.md) ([中文](../../docs/python_api_zh.md)).
+
+## API Contract
+
+| Entry point | Startup model | Omitted multipart `model` | Speaker opt-in |
+|---|---|---|---|
+| `python server.py` in this directory | `sensevoice` | `sensevoice` | No `spk` form field; only preserves speaker labels already returned by the model. |
+| `funasr-server` | `--model auto`: `fun-asr-nano` for a device string starting with `cuda`, otherwise `sensevoice` | `fun-asr-nano` | `spk=true` requests the separate speaker pipeline for non-native diarization models; default is `False`. |
+
+Specify `model` explicitly in requests: startup preloading and the request default are different settings. Query the deployed `/v1/models`; for example, `paraformer-en` is registered by this example but is not a built-in alias of the packaged server. Verify fields with the running `/openapi.json`, not just the checked-in [example schema](OPENAPI.md).
+
+`response_format=verbose_json` selects a response shape; **it does not enable diarization or force timestamp generation**. This example copies `sentence_info` into `segments` if present, otherwise returns `segments=[]`. Speaker labels can be absent or null. MOSS supplies native anonymous labels; it does not need `spk=true` or external VAD/CAM++.
+
+In this example, `duration` is elapsed time around `generate()` in seconds, excluding initial model loading; it is **not audio duration**. The packaged server's verbose response uses audio duration in seconds (its fallback can use 0 when audio metadata is unavailable). Segment `start`/`end` use seconds in both services. The packaged fallback can synthesize coarse segments from text and audio duration; those are not word-level forced alignment. Its verbose schema includes `task` and per-segment `id`/`words`, while this example includes `model`; do not assume identical JSON fields. See [response examples and speaker requests](CLIENTS.md#api-contract).
 
 ## Quick Start
 
+From the repository root:
+
 ```bash
 pip install funasr fastapi uvicorn python-multipart
+cd examples/openai_api
 python server.py --model sensevoice --device cuda --port 8000
 ```
 
-Server starts in ~20s (model loading). Health check: `GET /health`
+Wait for model loading before checking `GET /health`; download and startup time depend on the checkpoint, cache, network, and hardware. The commands below use this directory unless stated otherwise.
 
 Need copy-paste integration snippets for Python SDK, JavaScript/TypeScript, HTTP clients, agent tools, a browser demo, Postman, OpenAPI imports, Kubernetes deployment, or Dify/n8n-style workflows? See [Client recipes](CLIENTS.md), [JavaScript/TypeScript recipes](JAVASCRIPT.md), [Gradio browser demo](GRADIO.md), [workflow recipes](WORKFLOWS.md), the [Chinese workflow recipes](WORKFLOWS_zh.md), the [Postman collection](POSTMAN.md), the [OpenAPI spec](OPENAPI.md), the [security and gateway guide](SECURITY.md), and the [Kubernetes deployment template](kubernetes/README.md).
 
@@ -49,6 +67,8 @@ The browser demo calls the same OpenAI-compatible API endpoints as the smoke tes
 
 ## Usage with OpenAI SDK (Python)
 
+Install the separate HTTP client with `pip install openai`. This is not the FunASR Python SDK.
+
 ```python
 from openai import OpenAI
 
@@ -61,13 +81,14 @@ result = client.audio.transcriptions.create(
 )
 print(result.text)
 
-# With timestamps/segments
+# Inspect the verbose response; segments may be empty
 result = client.audio.transcriptions.create(
     model="sensevoice",
     file=open("meeting.wav", "rb"),
     response_format="verbose_json",
 )
-# Returns: text, segments (with start/end/speaker), duration
+# verbose_json does not enable diarization; see API Contract above
+print(getattr(result, "segments", []))
 ```
 
 ## Usage with curl
@@ -86,12 +107,22 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 ## Available Models
 
-| Model | Speed (GPU) | Speed (CPU) | Languages | Features |
-|-------|-------------|-------------|-----------|----------|
-| `sensevoice` | 170x realtime | 17x realtime | zh/en/ja/ko/yue | Emotion detection |
-| `paraformer` | 120x realtime | 15x realtime | zh/en | Punctuation |
-| `paraformer-en` | 120x realtime | 15x realtime | en | English only |
-| `fun-asr-nano` | 17x realtime | 3.6x realtime | zh/en/ja + Chinese dialects/accents | LLM-based, timestamps |
+These are aliases in this example's `MODEL_CONFIGS`, not a universal SDK or server model list. The endpoint removes rich `<|...|>` tags from returned text; it does not expose dedicated emotion/event fields.
+
+| Model | Example configuration | Response limits |
+|---|---|---|
+| `sensevoice` | SenseVoiceSmall + FSMN-VAD | Does not enable sentence timestamps or external speaker clustering by default. |
+| `paraformer` | `paraformer-zh` + FSMN-VAD + CT punctuation | Punctuation is configured; `verbose_json` alone does not request sentence records. |
+| `paraformer-en` | `paraformer-en` + FSMN-VAD | Example-only alias relative to the packaged server; no punctuation component configured here. |
+| `fun-asr-nano` | Fun-ASR-Nano via `AutoModel`, HF hub + FSMN-VAD | Not a vLLM route in this example. CTC timestamp availability depends on complete checkpoint weights. |
+| `moss-transcribe-diarize` | Third-party OpenMOSS native transcription/diarization adapter | Requires its separate dependency environment; preserves model-provided timestamps and anonymous labels. |
+
+For checkpoint-specific language and license information, use [model selection](../../docs/model_selection.md) and the model's own license. FunASR software's MIT license is not a license for every model weight. Benchmark the selected route on your own workload; these aliases do not define universal speed or capacity.
+
+MOSS uses a pinned third-party HF revision and must not be combined with an
+external VAD or speaker model. See the [complete MOSS deployment guide](../../docs/moss_transcribe_diarize.md)
+for `funasr-server`, Docker Compose, Kubernetes, vLLM, SGLang Omni, LocalAI,
+and FunClip paths.
 
 ## API Endpoints
 
@@ -106,7 +137,7 @@ Prefer no-code API checks? Use the [Gradio browser demo](GRADIO.md) for local up
 
 ## Agent Framework Integration
 
-Works with: **LangChain**, **LlamaIndex**, **AutoGen**, **CrewAI**, **Semantic Kernel**, **Dify**, **n8n**, or any framework using OpenAI audio API. See [Client recipes](CLIENTS.md) and [JavaScript/TypeScript recipes](JAVASCRIPT.md) for SDK and agent-tool patterns, plus [workflow recipes](WORKFLOWS.md) for low-code HTTP nodes and webhook workers ([中文](WORKFLOWS_zh.md)).
+The multipart HTTP/tool-function pattern can be used to integrate **LangChain**, **LlamaIndex**, **AutoGen**, **CrewAI**, **Semantic Kernel**, **Dify**, and **n8n**; validate the chosen integration against this service's supported fields. These recipes do not establish compatibility with every framework version or realtime API. See [Client recipes](CLIENTS.md) and [JavaScript/TypeScript recipes](JAVASCRIPT.md) for SDK and agent-tool patterns, plus [workflow recipes](WORKFLOWS.md) for low-code HTTP nodes and webhook workers ([中文](WORKFLOWS_zh.md)).
 
 ### LangChain Example
 ```python
@@ -124,7 +155,7 @@ def transcribe_for_agent(audio_path: str) -> str:
 
 ## Docker Deployment
 
-Build the example image from this directory. The default image starts in CPU mode so it can be used as a portable smoke test.
+From the repository root, build the example image with the following commands. The default image starts the example `server.py` in CPU mode, not the packaged `funasr-server`.
 
 ```bash
 cd examples/openai_api
@@ -171,6 +202,8 @@ For an internal cluster service with persistent model cache, health probes, and 
 Keep the default CPU mode until you have built a CUDA-capable image and configured GPU scheduling for your cluster.
 
 ## Configuration
+
+The following defaults belong to this example's `server.py`, not `funasr-server`; compare [API boundaries](#api-contract).
 
 | Arg | Default | Description |
 |-----|---------|-------------|

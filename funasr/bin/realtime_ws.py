@@ -13,6 +13,7 @@ Features:
 import asyncio
 from collections import deque
 import copy
+from difflib import SequenceMatcher
 import json
 import logging
 import os
@@ -280,6 +281,22 @@ def _normalize_transcript_with_positions(text):
 
 def _normalize_transcript(text):
     return _normalize_transcript_with_positions(text)[0]
+
+
+def _is_supported_transcript_extension(candidate, reference):
+    candidate, hallucinated = detect_and_fix_hallucination(candidate)
+    if hallucinated:
+        return False
+    candidate_cmp = _normalize_transcript(candidate)
+    reference_cmp = _normalize_transcript(reference)
+    if len(candidate_cmp) - len(reference_cmp) < 4:
+        return False
+    common_prefix_len = 0
+    for candidate_char, reference_char in zip(candidate_cmp, reference_cmp):
+        if candidate_char != reference_char:
+            break
+        common_prefix_len += 1
+    return common_prefix_len >= max(8, (len(reference_cmp) * 3) // 4)
 
 
 def _merge_overlapping_transcripts(existing, incoming):
@@ -677,7 +694,7 @@ class RealtimeASRSession:
         spk_tracker=None,
         sample_rate=16000,
         chunk_ms=960,
-        partial_window_sec=15.0,
+        partial_window_sec=8.0,
         audio_lookback_sec=5.0,
         endpoint_mode="server",
     ):
@@ -714,6 +731,11 @@ class RealtimeASRSession:
         self.segment_partial_start_ms = 0
         self.segment_partial_end_ms = 0
         self.segment_partial_stable_count = 0
+        self.segment_partial_observation_count = 0
+        self.segment_best_partial_text = ""
+        self.segment_best_partial_start_ms = 0
+        self.segment_best_partial_end_ms = 0
+        self.segment_best_partial_observation_count = 0
         self.last_decode_samples = 0
         self.locked_sentences = []
         self.prev_seg_text = ""
@@ -771,11 +793,17 @@ class RealtimeASRSession:
         self.audio_buffer = np.array([], dtype=np.float32)
         self.audio_buffer_start_sample = self.total_samples
 
-    def _reset_partial_history(self):
+    def _reset_partial_history(self, preserve_best=False):
         self.segment_partial_text = ""
         self.segment_partial_start_ms = 0
         self.segment_partial_end_ms = 0
         self.segment_partial_stable_count = 0
+        self.segment_partial_observation_count = 0
+        if not preserve_best:
+            self.segment_best_partial_text = ""
+            self.segment_best_partial_start_ms = 0
+            self.segment_best_partial_end_ms = 0
+            self.segment_best_partial_observation_count = 0
 
     def _record_partial_text(self, text, start_ms, hallucinated=False):
         """Build a confidence-bearing transcript across overlapping partial windows."""
@@ -783,20 +811,33 @@ class RealtimeASRSession:
         self.last_partial_end_ms = end_ms
         self.last_partial_eligible = bool(text.strip()) and not hallucinated
         if not text.strip() or hallucinated:
-            self._reset_partial_history()
+            self._reset_partial_history(preserve_best=hallucinated)
             return
 
         start_ms = int(start_ms)
         incoming_norm = _normalize_transcript(text)
+        best_norm = _normalize_transcript(self.segment_best_partial_text)
+        if not self.segment_best_partial_text or start_ms != self.segment_best_partial_start_ms:
+            self.segment_best_partial_text = text
+            self.segment_best_partial_start_ms = start_ms
+            self.segment_best_partial_end_ms = end_ms
+            self.segment_best_partial_observation_count = 1
+        else:
+            self.segment_best_partial_observation_count += 1
+            if len(incoming_norm) > len(best_norm):
+                self.segment_best_partial_text = text
+                self.segment_best_partial_end_ms = end_ms
         if not self.segment_partial_text:
             self.segment_partial_text = text
             self.segment_partial_start_ms = start_ms
             self.segment_partial_end_ms = end_ms
             self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
             return
 
         history_norm = _normalize_transcript(self.segment_partial_text)
         if start_ms == self.segment_partial_start_ms:
+            self.segment_partial_observation_count += 1
             if incoming_norm == history_norm:
                 self.segment_partial_text = text
                 self.segment_partial_end_ms = end_ms
@@ -812,6 +853,7 @@ class RealtimeASRSession:
             self.segment_partial_start_ms = start_ms
             self.segment_partial_end_ms = end_ms
             self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
             return
 
         if start_ms > self.segment_partial_end_ms:
@@ -819,6 +861,7 @@ class RealtimeASRSession:
             self.segment_partial_start_ms = start_ms
             self.segment_partial_end_ms = end_ms
             self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
             return
 
         merged = _merge_overlapping_transcripts(self.segment_partial_text, text)
@@ -826,11 +869,13 @@ class RealtimeASRSession:
             self.segment_partial_text = merged
             self.segment_partial_end_ms = end_ms
             self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count += 1
         else:
             self.segment_partial_text = text
             self.segment_partial_start_ms = start_ms
             self.segment_partial_end_ms = end_ms
             self.segment_partial_stable_count = 1
+            self.segment_partial_observation_count = 1
 
     def should_decode(self):
         threshold = self.first_chunk_samples if not self.first_decode_done else self.chunk_samples
@@ -1028,6 +1073,72 @@ class RealtimeASRSession:
         partial_text = self._partial_fallback_candidate(
             seg, require_stable=not final_hallucinated
         )
+        long_segment_reason = ""
+        if not partial_text:
+            segment_duration_ms = max(0, int(seg[1]) - int(seg[0]))
+            decode_chunk_ms = int(self.chunk_samples * 1000 / self.sample_rate)
+            recent_partial = self.last_partial_text.strip()
+            recent_start_ms = self.last_partial_start_ms
+            recent_end_ms = self.last_partial_end_ms
+            recent_observations = self.segment_partial_observation_count
+            recent_eligible = self.last_partial_eligible
+            if len(_normalize_transcript(self.segment_best_partial_text)) > len(
+                _normalize_transcript(recent_partial)
+            ):
+                recent_partial = self.segment_best_partial_text.strip()
+                recent_start_ms = self.segment_best_partial_start_ms
+                recent_end_ms = self.segment_best_partial_end_ms
+                recent_observations = self.segment_best_partial_observation_count
+                recent_eligible = True
+            tail_gap_ms = int(seg[1]) - int(recent_end_ms)
+            recent_partial, recent_hallucinated = detect_and_fix_hallucination(
+                recent_partial
+            )
+            if (
+                segment_duration_ms >= 8000
+                and recent_eligible
+                and recent_observations >= 2
+                and int(recent_start_ms) == int(seg[0])
+                and -max(100, decode_chunk_ms) <= tail_gap_ms
+                and tail_gap_ms <= max(100, decode_chunk_ms * 2)
+                and recent_partial
+                and not recent_hallucinated
+            ):
+                final_cmp = _normalize_transcript(final_text)
+                recent_cmp = _normalize_transcript(recent_partial)
+                matcher = SequenceMatcher(None, final_cmp, recent_cmp, autojunk=False)
+                matching_blocks = matcher.get_matching_blocks()
+                matched_chars = sum(block.size for block in matching_blocks)
+                final_coverage = matched_chars / max(1, len(final_cmp))
+                first_match = next(
+                    (block for block in matching_blocks if block.size), None
+                )
+                starts_aligned = bool(
+                    first_match and first_match.a <= 1 and first_match.b <= 2
+                )
+                diverged = final_cmp != recent_cmp
+                catastrophically_short = (
+                    diverged
+                    and len(final_cmp) >= 1
+                    and len(recent_cmp) >= 24
+                    and len(recent_cmp) >= len(final_cmp) * 3
+                    and starts_aligned
+                    and matched_chars >= max(1, len(final_cmp) // 2)
+                )
+                tail_regressed = (
+                    diverged
+                    and len(final_cmp) >= 16
+                    and len(recent_cmp) - len(final_cmp) >= 4
+                    and starts_aligned
+                    and final_coverage >= 0.75
+                )
+                if catastrophically_short or tail_regressed:
+                    partial_text = recent_partial
+                    long_segment_reason = (
+                        "catastrophically short"
+                        if catastrophically_short
+                        else "tail-regressed"
+                    )
         if not partial_text:
             return final_text
         partial_text, partial_hallucinated = detect_and_fix_hallucination(partial_text)
@@ -1044,12 +1155,15 @@ class RealtimeASRSession:
         use_partial = (
             (final_hallucinated and not partial_hallucinated)
             or truncated_prefix
+            or bool(long_segment_reason)
         )
         if use_partial and partial_cmp:
-            reason = "hallucinated" if final_hallucinated else "truncated"
+            reason = long_segment_reason or (
+                "hallucinated" if final_hallucinated else "truncated"
+            )
             logger.warning(
                 "Completed segment [%d-%dms] decode was %s; "
-                "keeping the latest aligned partial (%d -> %d chars)",
+                "keeping an aligned observed partial (%d -> %d chars)",
                 int(seg[0]), int(seg[1]), reason, len(final_text), len(partial_text),
             )
             return partial_text
@@ -1109,9 +1223,40 @@ class RealtimeASRSession:
             except Exception as e:
                 logger.error(f"Segment decode error: {e}")
 
+        decoded_text = text
         text = self._reconcile_completed_segment_text(
-            text, seg, decode_succeeded=decode_succeeded
+            decoded_text, seg, decode_succeeded=decode_succeeded
         )
+        retry_end_ms = min(int(self.last_partial_end_ms), int(seg[1]))
+        if (
+            decode_succeeded
+            and text != decoded_text
+            and int(seg[1]) - int(seg[0]) >= 8000
+            and int(seg[0]) < retry_end_ms < int(seg[1])
+        ):
+            retry_end_sample = min(
+                int(retry_end_ms * self.sample_rate / 1000), self.total_samples
+            )
+            retry_audio = self._slice_audio(start_sample, retry_end_sample)
+            if len(retry_audio) >= 1600:
+                try:
+                    retry_results = self.vllm_engine.generate(
+                        inputs=[torch.from_numpy(retry_audio).float()],
+                        hotwords=self.asr_kwargs.get("hotwords"),
+                        language=self.asr_kwargs.get("language"),
+                        max_new_tokens=512,
+                    )
+                    retry_text = retry_results[0]["text"] if retry_results else ""
+                    retry_text = _clean_asr_text(retry_text)
+                    if _is_supported_transcript_extension(retry_text, text):
+                        logger.warning(
+                            "Completed segment [%d-%dms] accepted an aligned "
+                            "boundary retry extension (%d -> %d chars)",
+                            int(seg[0]), int(seg[1]), len(text), len(retry_text),
+                        )
+                        text = retry_text
+                except Exception as error:
+                    logger.warning("Segment boundary retry failed: %s", error)
         text = _postprocess_result_text(text, self.asr_kwargs)
         self.prev_seg_text = text
         self._clear_completed_partial(seg)
@@ -1188,6 +1333,7 @@ def load_models(args):
             tensor_parallel_size=getattr(args, 'tensor_parallel_size', 1),
             gpu_memory_utilization=getattr(args, 'gpu_memory_utilization', 0.8),
             max_model_len=getattr(args, 'max_model_len', 2048),
+            enforce_eager=getattr(args, 'enforce_eager', False),
         )
         _vllm_engine = RealtimeBatchingEngine(
             engine,
@@ -1309,7 +1455,7 @@ async def handle_client(websocket, args):
         asr_kwargs,
         vad,
         spk_tracker=spk_tracker,
-        partial_window_sec=getattr(args, 'partial_window_sec', 15.0),
+        partial_window_sec=getattr(args, 'partial_window_sec', 8.0),
         endpoint_mode=endpoint_mode,
     )
     logger.info(f"Client connected: {websocket.remote_address}")
@@ -1504,11 +1650,11 @@ def build_arg_parser():
             "without loading the VAD model."
         ),
     )
-    parser.add_argument("--partial-window-sec", type=float, default=15.0,
+    parser.add_argument("--partial-window-sec", type=float, default=8.0,
                         help="Cap the interim partial re-decode window to the most recent N seconds. "
                              "A long ongoing speech segment is otherwise re-encoded from its start on "
                              "every chunk (O(L^2)), which saturates the GPU under concurrency and times "
-                             "out long-segment requests. Lower it (e.g. 8-10) for high-concurrency "
+                             "out long-segment requests. Raise it only after measuring headroom for your "
                              "self-hosting; <=0 disables (legacy behaviour). Final transcripts are unaffected.")
     parser.add_argument("--enable-spk", action="store_true", help="Enable streaming speaker diarization.")
     parser.add_argument("--spk-model", type=str, default="iic/speech_eres2netv2_sv_zh-cn_16k-common")
@@ -1534,6 +1680,11 @@ def build_arg_parser():
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--max-model-len", type=int, default=2048)
+    parser.add_argument(
+        "--enforce-eager",
+        action="store_true",
+        help="Disable vLLM compilation and CUDA graphs.",
+    )
     parser.add_argument("--ws-ping-interval", type=float, default=20.0,
                         help="WebSocket ping interval in seconds; <=0 disables keepalive pings.")
     parser.add_argument(

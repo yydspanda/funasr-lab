@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="./examples/colab/">Colab</a> · <a href="#benchmark">Benchmark</a> · <a href="./docs/model_selection.md">Model selection</a> · <a href="./docs/migration_from_whisper.md">Migration guide</a> · <a href="./docs/use_case_showcase.md">Use cases</a> · <a href="./docs/community_projects.md">Community integrations</a> · <a href="./docs/deployment_matrix.md">Deployment matrix</a> · <a href="https://www.funasr.com/">Deployment hub</a> · <a href="./docs/troubleshooting.md">Troubleshooting</a> · <a href="#model-zoo">Models</a> · <a href="https://modelscope.github.io/FunASR/agent.html">Agent Integration</a> · <a href="./integrations/openclaw/">OpenClaw</a> · <a href="https://modelscope.github.io/FunASR/">Docs</a> · <a href="./CONTRIBUTING.md">Contribute</a>
+  <a href="#quick-start">Quick Start</a> · <a href="./docs/model_selection.md">Model selection</a> · <a href="#model-zoo">Models</a> · <a href="./docs/deployment_matrix.md">Deployment matrix</a> · <a href="https://www.funasr.com/">Deployment hub</a> · <a href="https://www.funasr.com/en/docs/">Docs</a> · <a href="#benchmark">Benchmark</a> · <a href="./CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
@@ -32,6 +32,8 @@
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/modelscope/FunASR/blob/main/examples/colab/funasr_quickstart.ipynb)
 
 No local setup? Open the [Colab quickstart](./examples/colab/) to transcribe a public sample or upload your own audio in a browser.
+
+Found FunASR useful? [Star the project](https://github.com/modelscope/FunASR) so more builders can find it.
 
 ```bash
 # CPU-only installs can use the default PyPI wheels.
@@ -61,17 +63,16 @@ from funasr import AutoModel
 model = AutoModel(model="FunAudioLLM/Fun-ASR-Nano-2512", device="cuda")
 result = model.generate(input="https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav")
 print(result[0]["text"])
-# 欢迎大家来体验达摩院推出的语音识别模型。
 ```
 
 For the separate 31-language checkpoint, use
 [Fun-ASR-MLT-Nano-2512](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512).
 Language coverage is checkpoint-specific, so Nano and MLT-Nano should be treated as distinct model choices.
 
-On CPU (or for five-language ASR plus emotion and audio-event tags), use
-**SenseVoiceSmall**. The pipeline below composes SenseVoiceSmall with FSMN-VAD
-and CAM++; diarization is provided by the separate CAM++ model, not by the
-SenseVoiceSmall checkpoint:
+For a CPU-first example with five-language ASR plus emotion and audio-event
+tags, use **SenseVoiceSmall**. The pipeline below combines it with FSMN-VAD and
+CAM++ for speaker-aware VAD segments; these are not native speaker outputs of
+the SenseVoiceSmall checkpoint.
 See the [SenseVoice paper](https://arxiv.org/abs/2407.04051),
 [Hugging Face checkpoint](https://huggingface.co/FunAudioLLM/SenseVoiceSmall),
 and [GGUF edge checkpoint](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF).
@@ -80,7 +81,7 @@ and [GGUF edge checkpoint](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GG
 from funasr import AutoModel
 from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
-model = AutoModel(model="iic/SenseVoiceSmall", vad_model="fsmn-vad", spk_model="cam++", device="cuda")  # use device="cpu" if you don't have a GPU
+model = AutoModel(model="iic/SenseVoiceSmall", vad_model="fsmn-vad", spk_model="cam++", device="cpu")
 result = model.generate(
     input="https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav",
     batch_size_s=300,
@@ -91,13 +92,15 @@ for seg in result[0]["sentence_info"]:
     print(f"[{seg['start']/1000:.1f}s] Speaker {seg['spk']}: {rich_transcription_postprocess(seg['sentence'])}")
 ```
 
-**Output** — structured text with speaker labels, timestamps, and punctuation:
-```
-[0.6s] Speaker 0: 欢迎大家来体验达摩院推出的语音识别模型
-```
+This prints each returned segment's start time in seconds, anonymous speaker
+index, and text with SenseVoice tags removed. Text and segment boundaries depend
+on the audio and checkpoint; no fixed transcript is asserted here.
 
-One `AutoModel` pipeline call coordinates the configured ASR, VAD, and speaker
-models and returns the combined result.
+CAM++ extracts `spk_embedding` vectors. `AutoModel` clusters those embeddings
+and assigns speaker indices to VAD segments. Indices are local to a recording,
+not known-person identities. See the [SDK contract](./docs/python_api.md) for
+the component and result boundaries. Change to `device="cuda"` only after
+verifying a compatible GPU environment as described above.
 
 ### Scale & deploy the flagship
 
@@ -118,23 +121,22 @@ results = model.generate(["audio1.wav", "audio2.wav"], language="auto")
 
 ### Why FunASR?
 
-Whisper is a single model; **FunASR is a toolkit** — you pick the right model
-per job: **Fun-ASR-Nano** (Chinese, English, Japanese, and Chinese dialects;
-GPU), **Fun-ASR-MLT-Nano** (31 languages), **SenseVoiceSmall** (five-language
-ASR plus emotion and audio events), and **Paraformer** (low-latency streaming).
-The table shows toolkit-level capabilities and names the model or pipeline that
-provides each one:
+FunASR is a toolkit: choose the task, checkpoint, and runtime separately.
+Support in one model or adapter does not imply support in every serving backend.
 
-| | FunASR (toolkit) | Whisper | Cloud APIs |
+| Task | Checkpoint or pipeline | Runtime entrypoint | Important limitation |
 |---|---|---|---|
-| Top speed | **340x realtime** (Fun-ASR-Nano + vLLM) | 13x realtime | ~1x realtime |
-| Speaker ID | ✅ via VAD + CAM++ pipeline | ❌ Needs pyannote | ✅ Extra cost |
-| Emotion | ✅ via SenseVoice | ❌ | ❌ |
-| Languages | Checkpoint-specific (for example Qwen3-ASR 52, MLT-Nano 31, Nano zh/en/ja) | 57 | Varies |
-| Streaming | ✅ WebSocket (Paraformer) | ❌ | ✅ |
-| CPU viable | ✅ 17x realtime (SenseVoice) | ❌ Too slow | N/A |
-| Self-hosted | ✅ Yes (toolkit: MIT; model licenses vary) | ✅ MIT license | ❌ Cloud only |
-| Cost | Free | Free | $0.006/min+ |
+| File transcription with emotion/event tags | SenseVoiceSmall | Python `AutoModel`, CPU or GPU | Five-language checkpoint; tags do not identify speakers. |
+| LLM-based file transcription | Fun-ASR-Nano | `AutoModel`; split-engine `AutoModelVLLM` for the documented GPU path | Base Nano covers zh/en/ja and Chinese dialects/accents; timestamp support depends on checkpoint and path. |
+| Broader multilingual transcription | Fun-ASR-MLT-Nano | Python `AutoModel` | Separate 31-language checkpoint; do not transfer its coverage to base Nano. |
+| Chunked live transcription | Paraformer-zh-streaming | Streaming SDK or runtime WebSocket service | Use the streaming checkpoint and per-session cache, not an offline checkpoint. |
+| Speaker-aware file transcription | SenseVoiceSmall + FSMN-VAD + CAM++ | `AutoModel` with VAD and embedding clustering | Anonymous indices within a recording, not enrolled-speaker identification. |
+| Joint text, timestamps, and speakers | MOSS-Transcribe-Diarize, third-party OpenMOSS | FunASR adapter or upstream backend in the MOSS guide | Offline, recording-local anonymous labels; no external VAD/speaker pipeline for its unified path. |
+| Native CPU/edge transcription | Fun-ASR-Nano or SenseVoiceSmall GGUF | llama.cpp runtime | Requires matching converted weights; GGUF is not a Python `AutoModel` checkpoint. |
+
+See the [Model Zoo](./model_zoo/readme.md) and [deployment matrix](./docs/deployment_matrix.md)
+for checkpoint, interface, and licensing boundaries. Benchmark on your own audio
+and hardware before choosing a runtime.
 
 Trying FunASR for the first time? Use the [Colab quickstart](./examples/colab/) before setting up a local environment. Choosing a first model? Start with the [model selection guide](./docs/model_selection.md). Planning a switch from Whisper or a cloud ASR provider? Use the [migration guide](./docs/migration_from_whisper.md) and [benchmark example](./examples/migration/) to test representative audio, map features, and roll out safely.
 
@@ -160,11 +162,17 @@ Requirements: Python ≥ 3.8. Install PyTorch + torchaudio first ([pytorch.org](
 
 ## Model Zoo
 
+This list includes third-party models. **OpenMOSS** publishes MOSS-Transcribe-Diarize;
+FunASR provides an adapter, not ownership of its weights. Its unified path is
+offline, with anonymous labels scoped to each recording, not realtime or
+known-person identification. Model licenses are separate from the toolkit's MIT license.
+
 | Model | Task | Languages | Params | Links |
 |-------|------|-----------|--------|-------|
 | **Fun-ASR-Nano** | ASR | zh/en/ja + Chinese dialects and accents | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) [GGUF](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF) |
 | **Fun-ASR-MLT-Nano** | ASR | 31 languages | 800M | [⭐](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-MLT-Nano-2512) [🤗](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) |
 | **SenseVoiceSmall** | ASR + emotion + events | zh/en/ja/ko/yue | 234M | [⭐](https://www.modelscope.cn/models/iic/SenseVoiceSmall) [🤗](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) [GGUF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF) [paper](https://arxiv.org/abs/2407.04051) |
+| **MOSS-Transcribe-Diarize** | Third-party OpenMOSS: offline ASR + timestamps + anonymous speakers | See official card | See official card | [🤗](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) [guide](./docs/moss_transcribe_diarize.md) |
 | **Paraformer-zh** | ASR + timestamps | zh/en | 220M | [⭐](https://www.modelscope.cn/models/iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch/summary) [🤗](https://huggingface.co/funasr/paraformer-zh) |
 | Paraformer-zh-streaming | Streaming ASR | zh/en | 220M | [⭐](https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online/summary) [🤗](https://huggingface.co/funasr/paraformer-zh-streaming) |
 | Qwen3-ASR | ASR, 52 languages | multilingual | 1.7B | [usage](examples/industrial_data_pretraining/qwen3_asr) |
@@ -173,14 +181,14 @@ Requirements: Python ≥ 3.8. Install PyTorch + torchaudio first ([pytorch.org](
 | Whisper-large-v3-turbo | ASR + translation | multilingual | 809M | [usage](examples/industrial_data_pretraining/whisper) |
 | ct-punc | Punctuation | zh/en | 290M | [⭐](https://modelscope.cn/models/iic/punc_ct-transformer_cn-en-common-vocab471067-large/summary) [🤗](https://huggingface.co/funasr/ct-punc) |
 | fsmn-vad | VAD | zh/en | 0.4M | [⭐](https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/summary) [🤗](https://huggingface.co/funasr/fsmn-vad) |
-| cam++ | Speaker diarization | — | 7.2M | [⭐](https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common/summary) [🤗](https://huggingface.co/funasr/campplus) |
+| cam++ | Speaker embeddings (pipeline component) | — | 7.2M | [⭐](https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common/summary) [🤗](https://huggingface.co/funasr/campplus) |
 | emotion2vec+large | Emotion recognition | — | 300M | [⭐](https://modelscope.cn/models/iic/emotion2vec_plus_large/summary) [🤗](https://huggingface.co/emotion2vec/emotion2vec_plus_large) |
 
 ---
 
 ## Usage
 
-> Full examples with parameter docs: [Tutorial →](https://modelscope.github.io/FunASR/tutorial.html)
+> [Python tutorial](./docs/tutorial/README.md) · [SDK parameters and outputs](./docs/python_api.md) · [Training](./docs/training.md) · [Model registration](./docs/model_registration.md)
 
 ```python
 from funasr import AutoModel
@@ -251,7 +259,11 @@ pip install torch torchaudio
 pip install funasr vllm fastapi uvicorn python-multipart
 funasr-server --device cuda
 # → POST /v1/audio/transcriptions at localhost:8000
+# Joint long-form ASR + anonymous speaker labels (offline HTTP):
+funasr-server --model moss-transcribe-diarize --device cuda:0
 ```
+
+[MOSS service, Docker, Kubernetes, vLLM, SGLang, LocalAI, and FunClip guide →](./docs/moss_transcribe_diarize.md)
 
 Verify it with a public sample:
 
@@ -317,76 +329,33 @@ inference on physical Blackwell hardware.
 
 ## Benchmark
 
-> 184 long-form audio files (192 min). [Full report →](https://modelscope.github.io/FunASR/benchmark.html) · [RTFx and reproducibility notes →](./docs/benchmark/rtf_reproducibility.md)
+The [historical benchmark report](https://modelscope.github.io/FunASR/benchmark.html)
+and [split-engine measurements](./docs/vllm_guide.md#benchmark) retain their
+original results. They are separate records, not universal speed rankings or
+production capacity guarantees.
 
-| Model | Chinese CER ↓ | GPU Speed | CPU Speed | vs Whisper-large-v3 |
-|-------|------|-----------|-----------|-------------------|
-| **Fun-ASR-Nano** (vLLM) | **8.20%** | **340x** realtime | — | 🚀 **26x faster** |
-| **SenseVoice-Small** | **7.81%** | **170x** realtime | **17x** realtime | 🚀 **13x faster** |
-| **Paraformer-Large** | 10.18% | **120x** realtime | **15x** realtime | 🚀 **9x faster** |
-| Whisper-large-v3-turbo | 21.71% | 46x realtime | ❌ | 3.4x faster |
-| Whisper-large-v3 | 20.02% | 13x realtime | ❌ | baseline |
-
-> **Key takeaway:** FunASR models run on CPU faster than Whisper runs on GPU.
+Use the [RTFx and reproducibility notes](./docs/benchmark/rtf_reproducibility.md)
+to compare checkpoint/revision, audio set, hardware, batching, warmup, timing
+scope, and CER/WER. Offline throughput is not streaming latency. The
+[migration benchmark example](./examples/migration/) helps measure your own
+recordings with the same evaluation scope.
 
 ---
 
 ## What's new
 
-- 2026/08/30: **v1.4.8 on PyPI** — completes the third-party MOSS-Transcribe-Diarize vLLM path added after v1.4.7. `backend="vllm"` now accepts the official `response_format=diarized_json` speaker segments and normalizes them into FunASR `sentence_info`; `max_completion_tokens` is forwarded for long meetings, with 8192 tokens documented for recordings that exceed the default 5120-token boundary. MOSS still performs transcription, timestamps, and diarization end to end, so do not add external `vad_model` or `spk_model`. Upgrade with `python -m pip install -U "funasr==1.4.8"`. The GitHub Release pairs this package with the verified ten-platform llama.cpp v0.2.6 archives. [MOSS deployment guide ->](./docs/moss_transcribe_diarize.md) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.8)
-- 2026/08/30: **llama.cpp runtime v0.2.6** — adds a dedicated Windows CUDA architecture 120 (`sm_120`) archive for RTX 50 / Blackwell GPUs while retaining the architecture 86 package. The two CUDA ZIPs bundle the required NVIDIA cuBLAS DLLs and license, statically link the MSVC runtime, and pass PE import audits; all ten Linux, macOS, and Windows archives are built from one exact release commit and checked against their published SHA-256 values. Build and package verification does not prove successful inference on physical Blackwell hardware, so hardware reports remain open until users retest the matching archive. [Implementation ->](https://github.com/modelscope/FunASR/pull/3570) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.6)
-- 2026/08/30: **v1.4.7 on PyPI** — integrates the third-party OpenMOSS MOSS-Transcribe-Diarize model with FunASR `AutoModel`. Choose local Transformers (`backend="hf"`) or an existing vLLM server (`backend="vllm"`); both paths normalize the tagged model output into `text`, `raw_text`, millisecond `timestamp`, and speaker-aware `sentence_info`. MOSS performs transcription, timestamps, and diarization in one pass, so omit external `vad_model` and `spk_model`. This release also improves SRT cue continuity across tiny same-speaker gaps and adds opt-in realtime decode profiling for diagnosing long-session latency. Upgrade with `python -m pip install -U "funasr==1.4.7"`. The GitHub Release carries the verified nine-platform llama.cpp v0.2.5 runtime archives. [MOSS deployment guide ->](./docs/moss_transcribe_diarize.md) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.7)
-- 2026/08/29: **llama.cpp runtime v0.2.5** — uploads host weights into the selected Vulkan backend buffer before graph execution. Q8 and F16 weights pass local Linux Vulkan llvmpipe validation, and all nine Linux, macOS, and Windows archives were built from exact commit `f371370d4c5e4c61d13d4eb9c55cda2f4dd95e4f` and verified against their published SHA-256 values. This does not claim the AMD Windows hardware crash is fixed; [#3479](https://github.com/modelscope/FunASR/issues/3479) remains open for reporter retesting. [Fix ->](https://github.com/modelscope/FunASR/pull/3555) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.5)
-- 2026/08/29: **llama.cpp runtime v0.2.4** — fixes intermittent empty SenseVoiceSmall transcripts with F16 GGUF models. Query embeddings are now decoded according to their GGML F16/F32 type instead of reading F16 storage as F32. The exact v0.2.3 AVX2 asset reproduced 22 blank outputs across 298 completed runs; the fixed head produced one identical non-empty result in 100/100 runs and matched the Q8 model byte-for-byte. The release workflow will build nine Linux, macOS, and Windows archives from one exact commit. [Fix ->](https://github.com/modelscope/FunASR/pull/3550) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.4)
-- 2026/08/29: **v1.4.6 on PyPI** — the realtime WebSocket server keeps 20-second pings but no longer closes healthy sessions by default when queued decoding delays pong handling; operators can still configure a positive timeout after measuring production queue and decode latency. This release also avoids `IndexError` on empty English timestamp segments and groups adjacent subtitle words into readable cues. Upgrade with `python -m pip install -U "funasr==1.4.6"`. The GitHub Release carries the verified nine-platform llama.cpp v0.2.3 runtime archives. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.6)
-- 2026/08/29: **llama.cpp runtime v0.2.3** — adds flushed stage boundaries after backend initialization for model loading, audio/VAD, graph construction and allocation, and compute. These diagnostics narrow Windows AMD Vulkan `0xC0000005` failures that occur after `vulkan backend ready`; they do not claim the hardware-specific crash is fixed. Nine Linux, macOS, and Windows archives are published from one exact commit. [Troubleshooting boundaries ->](./runtime/llama.cpp/README.md#optional-windows-vulkan-backend-for-sensevoicesmall) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.3)
-- 2026/08/28: **v1.4.5 on PyPI** — `torchaudio` is no longer a hard inference dependency. Feature extraction uses `torchaudio.compliance.kaldi` when available or the optional `kaldi-native-fbank` backend, while operations that still require `torchaudio` now fail with an actionable message. The fallback was verified end to end on Ascend 910B: 70.47 s of audio processed in 1.15 s (RTF 0.016). Upgrade with `python -m pip install -U "funasr==1.4.5"`; on systems without `torchaudio`, install `python -m pip install -U "funasr[knf]==1.4.5"`. The GitHub Release also carries the verified nine-platform llama.cpp v0.2.1 runtime archives. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.5)
-- 2026/08/27: **llama.cpp runtime v0.2.1** — Vulkan device selection now accepts matching integrated GPUs, prefers a matching discrete GPU when both are available, and otherwise falls back to the iGPU. Nine Linux, macOS, and Windows archives were rebuilt and verified with published SHA-256 values. Radeon 780M still needs reporter hardware confirmation; the separate RX 9070 XT `0xC0000005` initialization crash is not claimed fixed. [Download matrix & quickstart ->](https://www.funasr.com/en/deploy/llama-cpp.html) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.1)
-- 2026/08/26: **v1.4.4 on PyPI** — realtime WebSocket decoding now batches compatible sessions instead of serializing every connection behind one process-wide lock. On the H100 regression workload, 12-client STOP p95 fell from 19.8 s to 0.4 s and 16-client aggregate throughput rose from 8.6x to 13.2x, with no client errors. This hotfix also restores compatibility with PyTorch releases that do not expose `torch.amp` and raises real runtime-binding exceptions. Upgrade with `python -m pip install -U "funasr==1.4.4"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.4)
-- 2026/08/21: **v1.4.3 on PyPI** — `AutoModel(vad_model="silero-vad")` now offers an optional Silero VAD adapter with millisecond segments, configurable thresholds, 8/16 kHz input, ONNX mode, and bounded segment lengths. Upgrade with `python -m pip install -U "funasr==1.4.3"`; enable the adapter with `python -m pip install -U "funasr[silero]==1.4.3"`. Speaker diarization with a known speaker count now routes large embedding sets through fixed-K clustering instead of memory-heavy dense spectral clustering. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.3)
-- 2026/08/14: **v1.4.2 on PyPI** — punctuation-aware sentence alignment now preserves subtitle segmentation when a punctuation token boundary splits a timestamped ASR word. Distributed training now synchronizes DDP/FSDP gradients on the final microbatch of each accumulation window and initializes DeepSpeed/FSDP mode from the resolved configuration. The tagged source also includes llama.cpp SRT output and the v0.2.0 AMD Vulkan submission updates. Install with `python -m pip install -U "funasr==1.4.2"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.2)
-- 2026/08/11: **llama.cpp runtime v0.2.0** — pins upstream llama.cpp at `803b7fca` and publishes nine SHA-256-listed Linux, macOS, and Windows archives from one tested workflow. Fun-ASR-Nano, SenseVoice, and Paraformer CLIs can now write SRT subtitles; Vulkan startup reports actionable AMD diagnostics and a CPU fallback. The AMD Windows Vulkan crash fix still awaits confirmation on the reporter's hardware. [Download matrix & quickstart ->](https://www.funasr.com/en/deploy/llama-cpp.html) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.0)
-- 2026/08/04: **v1.4.1 on PyPI** — the Hugging Face `paraformer-en` alias now resolves to the official English checkpoint instead of silently downloading the Chinese model. This patch also includes Fun-ASR-Nano LoRA fine-tuning and safer checkpoint handling; the tagged source adds JSONL timestamp output, SenseVoice TensorRT deployment, and the OpenClaw realtime transcription integration. Install with `python -m pip install -U "funasr==1.4.1"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.1)
-- 2026/08/04: **OpenClaw realtime transcription integration** — the new [`openclaw-funasr`](integrations/openclaw/) source package connects self-hosted FunASR `online`, `offline`, and `2pass` WebSocket recognition to OpenClaw Talk and Voice Call. Its 8 kHz G.711 mu-law conversion, 60 ms framing, partial/final transcripts, reconnect limits, package installation, and runtime registration have been verified against OpenClaw `2026.7.2`; npm and ClawHub publication will follow the required [upstream SDK change](https://github.com/openclaw/openclaw/pull/118977).
-- 2026/07/31: **v1.4.0 on PyPI** — `AutoModel` now rejects the common `vda_model` misspelling before model download and points to `vad_model`, so VAD-dependent segmentation, speaker processing, and `sentence_info` are not silently disabled. The GitHub source release also updates the legacy WebSocket file runtime: clients wait for an explicit end-of-input acknowledgement while the server flushes pending offline, online, and 2pass audio and reports finalization failures. Install the Python package with `python -m pip install -U "funasr==1.4.0"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.0)
-- 2026/07/27: **v1.3.30 on PyPI** — container-formatted WAV, MP3, FLAC, OGG, MP4/M4A, and WebM audio bytes are now decoded through their codecs instead of being misread as raw PCM. OpenAI-compatible responses preserve speaker labels, VAD sentence timing survives punctuation mismatch, trusted browser clients can opt in to CORS, and vLLM VAD chunks are capped at 30 seconds. The GitHub release also includes the current prebuilt llama.cpp runtime for nine desktop and server targets. Install with `python -m pip install -U "funasr==1.3.30"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.30)
-- 2026/07/24: **v1.3.29 hotfix on PyPI** — SenseVoice long-audio inference now returns each VAD speech region through `sentence_info` when token timestamps and a punctuation model are unavailable. Subtitle clients receive the recognized text with real millisecond start/end bounds instead of one zero-length or full-media cue. Install with `python -m pip install -U "funasr==1.3.29"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.29)
-- 2026/07/24: **v1.3.28 hotfix on PyPI** — realtime WebSocket finalization now preserves clean continuous partial transcripts when a VAD-locked decode truncates to a short prefix, repeats a hallucinated phrase, or raises; short STOP tails, VAD finalization, and speaker completion now share the same reliable path. SenseVoice subtitle segmentation also aligns rich tags, punctuation, and word/BPE timestamps without collapsing Chinese into one cue or damaging English surface text. Install with `python -m pip install -U "funasr==1.3.28"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.28)
-- 2026/07/24: **v1.3.27 on PyPI** — the OpenAI-compatible server now reports detected SenseVoice language metadata in `verbose_json` and reuses the cached Fun-ASR-Nano `AutoModel` after vLLM fallback. When vLLM/VAD setup and its fallback both fail, half-initialized engine state is cleared so a later request can retry. Install with `python -m pip install -U "funasr==1.3.27"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.27)
-- 2026/07/23: **llama.cpp runtime v0.1.9** — adds `funasr-llamacpp-windows-x64-vulkan.zip` for standalone SenseVoiceSmall Vulkan inference on Windows with AMD, Intel, or NVIDIA drivers. Linux Vulkan, Windows CUDA, CPU/AVX2, Linux arm64, and macOS arm64 assets remain available. [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.1.9)
-- 2026/07/23: **v1.3.26 on PyPI** — `funasr-server --model fun-asr-nano --hub ms` now honors the requested ModelScope hub for the default Fun-ASR-Nano model in both the vLLM path and the AutoModel fallback, avoiding unintended Hugging Face downloads when users choose ModelScope. Install with `python -m pip install -U "funasr==1.3.26"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.26)
-- 2026/07/23: **v1.3.25 on PyPI** — realtime WebSocket users can now use deterministic final-text hotword corrections with `POSTPROCESS_HOTWORDS:wrong=>right` or `--postprocess-hotword-file`, keeping fixed-name cleanup separate from model-level `HOTWORDS:` decoding bias. The source-tree realtime entrypoint also works without preinstalling the package. Install with `python -m pip install -U "funasr==1.3.25"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.25)
-- 2026/07/23: **v1.3.24 on PyPI** — OpenAI-compatible server deployments now support custom model paths and hub selection, the llama.cpp/GGUF runtime docs include the HTTP transcription wrapper and Linux Vulkan package, and public docs links were refreshed for cleaner onboarding. Install with `python -m pip install -U "funasr==1.3.24"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.24)
-- 2026/07/22: **v1.3.23 on PyPI** — packaging and onboarding refresh for this week's community integrations: the PyPI long description now highlights the current OpenAI-compatible server path, llama.cpp/GGUF runtime notes, Windows CUDA architecture guidance, and browser quickstart links shipped in the repository docs. Runtime code is unchanged from v1.3.22. Install with `python -m pip install -U "funasr==1.3.23"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.23)
-- 2026/07/22: **llama.cpp runtime v0.1.8** — adds `funasr-llamacpp-linux-x64-vulkan.tar.gz` for SenseVoiceSmall on Linux Vulkan GPUs. Run `llama-funasr-sensevoice ... --backend vulkan`; CPU, AVX2, macOS arm64, Windows CPU/AVX2, and Windows CUDA packages remain available. [Release ->](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.1.8)
-- 2026/07/19: **v1.3.22 on PyPI** — `funasr-server` now fills OpenAI-compatible `verbose_json.segments` for text-only SenseVoice/Paraformer fallback responses, so subtitle clients no longer see an empty `segments` array when `text` is populated. Install with `python -m pip install -U "funasr==1.3.22"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.22)
-- 2026/07/19: **v1.3.21 on PyPI** — fixes first-import onboarding in fresh environments where users install `funasr` before choosing a platform-specific PyTorch build. `import funasr` and `funasr.__version__` now work without torch; accessing `AutoModel` still requires PyTorch and raises a clear install hint. Install with `python -m pip install -U "funasr==1.3.21"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.21)
-- 2026/07/19: **v1.3.20 on PyPI** — PyPI metadata and install guidance now point at the current FunASR docs, community integrations, and quoted `python -m pip install -U "funasr>=1.3.19"` commands for Fun-ASR-Nano deployment paths. This is a documentation/packaging sync; runtime code remains unchanged from v1.3.19. Install with `python -m pip install -U "funasr==1.3.20"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.20)
-- 2026/07/19: **v1.3.19 on PyPI** — realtime WebSocket long-session troubleshooting docs are now shipped with the package. Run the server with `--enable-spk --log-session-stats-interval 30` and attach the emitted `Session stats:` lines when reporting disconnects or memory growth. Install with `python -m pip install -U "funasr==1.3.19"`. [Long-session guide ->](docs/vllm_guide.md#long-session-diagnostics) · [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.19)
-- 2026/07/19: **v1.3.18 on PyPI** — CLI SRT/TSV subtitle output now requests sentence timestamps and loads punctuation when needed, so `funasr audio.wav --output-format srt --output-dir ./subs` writes segmented subtitle cues instead of one full-text block. Install with `python -m pip install -U "funasr==1.3.18"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.3.18)
-- 2026/07/18: **v1.3.16 on PyPI** — client-driven realtime endpoints for Fun-ASR-Nano. Start one WebSocket session, stream PCM, and send `COMMIT` for each utterance without loading server-side VAD; short utterances finalize and timestamps remain monotonic across commits. Install with `pip install --upgrade funasr`, then run `funasr-realtime-server --endpoint-mode client`. [Guide →](examples/industrial_data_pretraining/fun_asr_nano/docs/realtime_demo.md)
-- 2026/07/18: **llama.cpp runtime v0.1.7** — prebuilt Windows CUDA package for SenseVoiceSmall (`funasr-llamacpp-windows-x64-cuda.zip`) plus Linux / macOS / Windows CPU packages. Download the GGUF model, then run `llama-funasr-sensevoice ... --backend cuda` on supported NVIDIA GPUs. [Release →](https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.1.7)
-- 2026/06/20: **llama.cpp / GGUF runtime** — run SenseVoice / Paraformer / Fun-ASR-Nano on CPU & edge as a single self-contained binary (a whisper.cpp-style alternative), built-in FSMN-VAD, no Python at runtime. Prebuilt binaries for Linux / macOS / Windows + **q8 quantized models (~half the size, same accuracy)**. [runtime/llama.cpp/](./runtime/llama.cpp/) · [Releases](https://github.com/modelscope/FunASR/releases)
-- 2026/06/21: **v1.3.12** on PyPI — rolling fixes (qwen3-asr language codes, glm_asr, vLLM repetition_penalty). `pip install --upgrade funasr`
-- 2026/05/24: **vLLM Inference Engine** — 2-3x faster LLM decoding for Fun-ASR-Nano. Streaming WebSocket service with VAD + Speaker Diarization. [Guide →](docs/vllm_guide.md) · [Realtime WS tuning →](docs/vllm_guide.md#67-production-concurrency-and-multi-process-deployment) · [API stability checklist →](docs/vllm_guide.md#production-api-stability-checklist)
-- 2026/05/24: **Dynamic VAD** — adaptive silence threshold (default on). Short sentences stay intact, long segments get auto-split. [Details →](docs/vllm_guide.md#附录dynamicstreamingvad)
-- 2026/05/24: **v1.3.3** — `funasr-server` CLI, OpenAI-compatible API, MCP Server for AI agents. `pip install --upgrade funasr`
-- 2026/05/20: Added Qwen3-ASR (0.6B/1.7B) — 52 languages, auto detection. [usage](examples/industrial_data_pretraining/qwen3_asr)
-- 2026/05/20: Added GLM-ASR-Nano (1.5B) — 17 languages, dialect support. [usage](examples/industrial_data_pretraining/glm_asr)
-- 2026/05/19: Fun-ASR-Nano and SenseVoice can be combined with VAD and CAM++ for speaker diarization.
-- 2025/12/15: [Fun-ASR-Nano-2512](https://github.com/QwenAudio/Fun-ASR) — Chinese, English, Japanese, and Chinese dialect support; trained on tens of millions of hours.
+- **MOSS-Transcribe-Diarize** brings long-form ASR, timestamps, and anonymous speaker labels to FunASR services, Docker, Kubernetes, vLLM/SGLang workflows, and FunClip. [Deploy MOSS ->](./docs/moss_transcribe_diarize.md)
+- **FunASR 1.4.14** completes MOSS service and Model Zoo discovery, and improves realtime serving stability while retaining the NumPy ABI safeguard. Install with `python -m pip install -U "funasr==1.4.14"`. [Release ->](https://github.com/modelscope/FunASR/releases/tag/v1.4.14)
+- **Production deployment** now includes faster, more resilient realtime serving and verified llama.cpp archives for ten Linux, macOS, and Windows targets. [GPU services ->](./docs/vllm_guide.md) · [CPU/edge packages ->](https://www.funasr.com/en/deploy/llama-cpp.html)
 
-<details><summary>Older</summary>
-
-- 2024/10/10: Whisper-large-v3-turbo support added.
-- 2024/07/04: [SenseVoice](https://github.com/QwenAudio/SenseVoice) — ASR + emotion + audio events.
-- 2024/01/30: FunASR 1.0 released.
-
-</details>
+> See [GitHub Releases](https://github.com/modelscope/FunASR/releases) for the complete changelog and downloadable assets.
 
 ---
 
 ## Community
+
+Start with [troubleshooting](./docs/troubleshooting.md) before reporting a problem.
+Include your exact model, runtime, environment and a minimal reproduction.
 
 |  |  |
 |---|---|

@@ -6,7 +6,7 @@ const python = process.env.SITE_PYTHON || 'python3';
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'product-site.spec.ts',
+  testMatch: '*.spec.ts',
   timeout: 45_000,
   workers: 1,
   reporter: 'line',

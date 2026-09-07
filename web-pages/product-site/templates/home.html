@@ -1,37 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="hero" data-section="hero">
-  <img class="hero-image" src="{{ assets['images/deployment-topology.png'] }}" alt="{{ '连接 GPU、CPU、边缘设备和 API 客户端的私有部署拓扑' if language == 'zh' else 'Private deployment topology connecting GPU, CPU, edge devices, and API clients' }}">
-  <div class="hero-shade" aria-hidden="true"></div>
+  <img class="hero-image" src="{{ assets['images/speech-waveform.png'] }}" alt="{{ '公开中文语音样本的实际波形' if language == 'zh' else 'Waveform of the public Chinese speech sample' }}">
   <div class="hero-content">
-    <p class="eyebrow">{{ '开源语音基础设施' if language == 'zh' else 'Open speech infrastructure' }}</p>
+    <p class="eyebrow">OPEN SOURCE / SPEECH INTELLIGENCE</p>
     <h1>FunASR</h1>
     <p class="hero-copy">
-      {{ '可私有化部署的语音智能基础设施。覆盖 GPU 高吞吐、实时流式服务、OpenAI 兼容 API，以及 CPU 与边缘独立运行。' if language == 'zh' else 'Private-deployment speech infrastructure for high-throughput GPU inference, realtime streaming, OpenAI-compatible APIs, and standalone CPU or edge use.' }}
+      {{ '让语音，成为可用的信息。' if language == 'zh' else 'Turn speech into useful information.' }}
     </p>
+    <p class="hero-description">{{ '语音识别、时间戳、说话人分离。从一行 Python，到你自己的生产服务。' if language == 'zh' else 'Recognition, timestamps, and diarization. From a line of Python to your own production service.' }}</p>
     <div class="hero-actions">
-      <a class="button button-primary" href="#deployment-selector">
-        {{ '选择部署方案' if language == 'zh' else 'Choose a deployment' }}
+      <a class="button button-primary" href="{{ '/quickstart.html' if language == 'zh' else '/en/quickstart.html' }}">
+        {{ '开始构建' if language == 'zh' else 'Start building' }}
         <img src="{{ assets['lucide/arrow-right.svg'] }}" alt="">
       </a>
-      <a class="button button-secondary" href="{{ '/quickstart.html' if language == 'zh' else '/en/quickstart.html' }}">
+      <a class="button button-secondary" href="#deployment-selector">
         <img src="{{ assets['lucide/terminal.svg'] }}" alt="">
-        {{ '5 分钟验证' if language == 'zh' else 'Verify in five minutes' }}
+        {{ '选择部署方案' if language == 'zh' else 'Choose a deployment' }}
       </a>
     </div>
-    <dl class="hero-proof">
-      <div><dt>{{ '许可' if language == 'zh' else 'License' }}</dt><dd>Apache-2.0</dd></div>
-      <div><dt>{{ '接口' if language == 'zh' else 'API' }}</dt><dd>OpenAI compatible</dd></div>
-      <div><dt>{{ '验证日期' if language == 'zh' else 'Verified' }}</dt><dd>{{ verified }}</dd></div>
-    </dl>
+    <div class="audio-proof"><div><span class="sample-label">{{ '公开样本 · 中文' if language == 'zh' else 'PUBLIC SAMPLE · CHINESE' }}</span><p>欢迎大家来体验达摩院推出的语音识别模型。</p></div><audio controls preload="metadata" src="{{ assets['audio/speech-sample.wav'] }}" aria-label="{{ '播放公开中文样本' if language == 'zh' else 'Play public Chinese sample' }}"></audio></div>
+  </div>
+</section>
+
+<section class="section repository-router" data-section="repository-router">
+  <div class="section-heading compact-heading">
+    <p class="eyebrow">{{ '一个工具箱，多种可能' if language == 'zh' else 'ONE TOOLKIT. MANY POSSIBILITIES.' }}</p>
+    <h2>{{ '为你的应用，选对模型。' if language == 'zh' else 'The right model for your application.' }}</h2>
+  </div>
+  <div class="repository-router-links">
+    <a href="/go/fun-asr">
+      <span>Fun-ASR</span>
+      <strong>{{ '高精度与 31 语种转写' if language == 'zh' else 'High-accuracy and 31-language transcription' }}</strong>
+      <img src="{{ assets['lucide/arrow-right.svg'] }}" alt="">
+    </a>
+    <a href="/go/sensevoice">
+      <span>SenseVoice</span>
+      <strong>{{ '多语种、情感与音频事件' if language == 'zh' else 'Languages, emotion, and audio events' }}</strong>
+      <img src="{{ assets['lucide/arrow-right.svg'] }}" alt="">
+    </a>
+    <a href="/go/funclip">
+      <span>FunClip</span>
+      <strong>{{ '从语音定位到视频剪辑' if language == 'zh' else 'From speech localization to video clipping' }}</strong>
+      <img src="{{ assets['lucide/arrow-right.svg'] }}" alt="">
+    </a>
+    <a href="{{ '/docs/moss-transcribe-diarize.html' if language == 'zh' else '/en/docs/moss-transcribe-diarize.html' }}">
+      <span>MOSS <small>OpenMOSS</small></span>
+      <strong>{{ '长音频转写与匿名说话人' if language == 'zh' else 'Long-form transcription & anonymous speakers' }}</strong>
+      <img src="{{ assets['lucide/arrow-right.svg'] }}" alt="">
+    </a>
+  </div>
+</section>
+
+<section class="section knowledge-entry" data-section="documentation">
+  <div class="section-heading compact-heading"><p class="eyebrow">{{ '开发者文档' if language == 'zh' else 'DEVELOPER DOCUMENTATION' }}</p><h2>{{ '从问题，直接到答案。' if language == 'zh' else 'Find your next step.' }}</h2></div>
+  {% include 'search.html' %}
+  <div class="learning-paths">
+    <a href="{{ '/docs/model-selection.html' if language == 'zh' else '/en/docs/model-selection.html' }}"><span>01</span><strong>{{ '选模型' if language == 'zh' else 'Choose a model' }}</strong><small>{{ '能力、语种与时间戳' if language == 'zh' else 'Capabilities, languages & timestamps' }}</small></a>
+    <a href="{{ '/quickstart.html' if language == 'zh' else '/en/quickstart.html' }}"><span>02</span><strong>{{ '跑通推理' if language == 'zh' else 'Run inference' }}</strong><small>Python / CLI / API</small></a>
+    <a href="{{ '/deploy/' if language == 'zh' else '/en/deploy/' }}"><span>03</span><strong>{{ '部署服务' if language == 'zh' else 'Deploy a service' }}</strong><small>vLLM / llama.cpp / Docker</small></a>
+    <a href="{{ '/docs/troubleshooting.html' if language == 'zh' else '/en/docs/troubleshooting.html' }}"><span>04</span><strong>{{ '稳定运行' if language == 'zh' else 'Operate reliably' }}</strong><small>{{ '评测、监控与故障排查' if language == 'zh' else 'Evaluation, monitoring & troubleshooting' }}</small></a>
   </div>
 </section>
 
 <section id="deployment-selector" class="section selector-section" data-section="deployment-selector">
   <div class="section-heading">
     <p class="eyebrow">{{ '部署选择器' if language == 'zh' else 'Deployment selector' }}</p>
-    <h2>{{ '从工作负载开始，不从框架名开始' if language == 'zh' else 'Start with the workload, not a framework name' }}</h2>
-    <p>{{ '选择业务形态、硬件和首要目标，得到一条有明确限制的推荐路径。' if language == 'zh' else 'Choose the workload, hardware, and primary goal to get one recommendation with an explicit limitation.' }}</p>
+    <h2>{{ '在你的硬件上，找到合适的运行时。' if language == 'zh' else 'A runtime that fits your hardware.' }}</h2>
+    <p>{{ '从本地 CPU 到 GPU 集群，每条路径都有安装步骤、测试记录和已知限制。' if language == 'zh' else 'From a local CPU to GPU infrastructure, with setup steps, test records, and known limitations.' }}</p>
   </div>
   <form class="selector" data-deployment-selector>
     <fieldset>
@@ -83,8 +119,9 @@
 <section class="section matrix-section" data-section="deployment-matrix">
   <div class="section-heading compact-heading">
     <p class="eyebrow">{{ '完整矩阵' if language == 'zh' else 'Full matrix' }}</p>
-    <h2>{{ '无 JavaScript 也能完成选择' if language == 'zh' else 'The full decision path works without JavaScript' }}</h2>
+    <h2>{{ '运行时一览' if language == 'zh' else 'Explore the runtimes' }}</h2>
   </div>
+  <details class="matrix-disclosure"><summary>{{ '查看全部部署路径' if language == 'zh' else 'Compare all deployment paths' }} <span>{{ deployments | length }}</span></summary>
   <div class="table-wrap">
     <table>
       <thead><tr>
@@ -107,6 +144,7 @@
       </tbody>
     </table>
   </div>
+  </details>
 </section>
 
 <section class="section api-section" data-section="api-contract">
@@ -117,13 +155,13 @@
   </div>
   <div class="terminal" aria-label="{{ 'OpenAI 兼容 API 验证命令' if language == 'zh' else 'OpenAI-compatible API verification commands' }}">
     <div class="terminal-bar"><span></span><span></span><span></span><strong>localhost:8000</strong></div>
-    <pre><code><span class="prompt">$</span> curl -fsS http://localhost:8000/health
-{"status":"ok"}
+    <pre><code>curl -fsS http://localhost:8000/health
+# {"status":"ok"}
 
-<span class="prompt">$</span> curl -fsS http://localhost:8000/v1/models
-{"data":[{"id":"sensevoice"}]}
+curl -fsS http://localhost:8000/v1/models
+# {"data":[{"id":"sensevoice"}]}
 
-<span class="prompt">$</span> curl http://localhost:8000/v1/audio/transcriptions \
+curl -fsS http://localhost:8000/v1/audio/transcriptions \
   -F file=@meeting.wav -F model=sensevoice</code></pre>
     <button class="icon-button copy-button" type="button" data-copy-target=".terminal pre" title="{{ '复制命令' if language == 'zh' else 'Copy commands' }}">
       <img src="{{ assets['lucide/copy.svg'] }}" alt="">

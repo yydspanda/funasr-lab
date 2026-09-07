@@ -64,9 +64,16 @@
     button.addEventListener('click', async () => {
       const target = document.querySelector(button.dataset.copyTarget);
       if (!target) return;
-      await navigator.clipboard.writeText(target.textContent.trim());
-      button.dataset.copied = 'true';
-      window.setTimeout(() => delete button.dataset.copied, 1400);
+      const original = button.title;
+      try {
+        await navigator.clipboard.writeText(target.textContent.trim());
+        button.dataset.copied = 'true';
+        button.title = document.body.dataset.language === 'zh' ? '已复制' : 'Copied';
+      } catch {
+        button.title = document.body.dataset.language === 'zh' ? '复制失败，请选择代码' : 'Copy failed; select the code';
+      }
+      button.setAttribute('aria-label', button.title);
+      window.setTimeout(() => { delete button.dataset.copied; button.title = original; button.setAttribute('aria-label', original); }, 1400);
     });
   });
 })();

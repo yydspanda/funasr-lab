@@ -14,8 +14,8 @@
 | Kubernetes API | 集群内私有语音 API | [Kubernetes 模板](../examples/openai_api/kubernetes/README_zh.md) | 默认私有 `ClusterIP`；对外开放前补齐鉴权、TLS、网络策略和 GPU 调度。 |
 | Runtime WebSocket 服务 | 实时字幕、会议、客服流式音频 | [Runtime 服务文档](../runtime/readme_cn.md) | 需要中间结果、断句或长连接音频流时选择。 |
 | ONNX/C++ Runtime | 高并发 CPU 服务或嵌入式实时 ASR | [ONNX Runtime 文档](../runtime/onnxruntime/readme.md) | 如果延迟和并发已经验证，不要轻易替换；固定业务词优先做文本后处理。 |
-| vLLM 加速 | Fun-ASR-Nano 等 LLM-based ASR 高吞吐 | [vLLM 指南](./vllm_guide.md) | 适合 LLM 解码吞吐；不适用于非自回归 Paraformer。 |
-| MOSS-Transcribe-Diarize | 长音频多人转写、时间戳和说话人标签 | [第三方 MOSS 部署指南](./moss_transcribe_diarize.md) | OpenMOSS Apache-2.0 模型，已接入 FunASR `AutoModel`；可选本地 HF（`backend="hf"`）或 vLLM（`backend="vllm"`）。模型仍由 OpenMOSS 发布和维护。 |
+| vLLM 加速 | Fun-ASR-Nano 原生文件转写或 split-engine LLM 解码 | [官方原生验证](./vllm_official_native_validation_zh.md)；[split-engine 指南](./vllm_guide_zh.md) | 原生路径固定官方 a4362c94 本地快照、vLLM 0.27.1，仅为既有环境功能验证，不是全新安装或容量验证；不适用于非自回归 Paraformer。 |
+| MOSS-Transcribe-Diarize | 长音频多人转写、时间戳和说话人标签 | [第三方 MOSS 部署指南](./moss_transcribe_diarize.md) | OpenMOSS Apache-2.0 模型，已接入 FunASR `AutoModel`；可选本地 HF（`backend="hf"`）、vLLM（`backend="vllm"`）或 SGLang Omni（`backend="sglang"`）。模型仍由 OpenMOSS 发布和维护。 |
 | MCP 服务 | Claude/Cursor/桌面 Agent 语音工具 | [MCP 示例](../examples/mcp_server/) | 适合把 ASR 结果暴露成一个本地工具。 |
 | 字幕生成 | 从长音频或视频生成 SRT/VTT | [字幕示例](../examples/subtitle/) | 需要可读性时使用 verbose segments 和说话人标签。 |
 | 批处理脚本 | 录音归档、会议纪要、数据集处理 | [批处理示例](../examples/batch_asr_improved.py) | 生产使用时建议增加队列、manifest 和重试日志。 |

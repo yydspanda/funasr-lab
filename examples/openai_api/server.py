@@ -6,6 +6,7 @@ Works with any agent framework that supports OpenAI audio API.
 
 Usage:
     python server.py --model sensevoice --device cuda --port 8000
+    python server.py --model moss-transcribe-diarize --device cuda:0 --port 8000
 
 Then use with any OpenAI-compatible client:
     curl http://localhost:8000/v1/audio/transcriptions \
@@ -31,6 +32,8 @@ app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
 
 MODEL_REGISTRY = {}
 DEVICE = "cpu"
+DEFAULT_MODEL = "sensevoice"
+N8N_OPENAI_MODEL_ALIAS = "whisper-1"
 
 MODEL_CONFIGS = {
     "sensevoice": {
@@ -53,6 +56,13 @@ MODEL_CONFIGS = {
         "trust_remote_code": True,
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
+    },
+    "moss-transcribe-diarize": {
+        "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+        "model_revision": "e8681d68e7042738ffca8ac8212bc8fcb1131ab8",
+        "hub": "hf",
+        "backend": "hf",
+        "trust_remote_code": True,
     },
 }
 
@@ -87,6 +97,13 @@ def clean_text(text: str) -> str:
     return re.sub(r'<\|[^|]*\|>', '', text).strip()
 
 
+def resolve_openai_transcription_model(requested_model: str) -> str:
+    """Map n8n's fixed OpenAI transcription model to the started model."""
+    if requested_model == N8N_OPENAI_MODEL_ALIAS:
+        return DEFAULT_MODEL
+    return requested_model
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
     file: UploadFile = File(...),
@@ -99,10 +116,12 @@ async def transcribe(
     
     Accepts the same parameters as OpenAI's /v1/audio/transcriptions:
     - file: Audio file (wav, mp3, flac, m4a, ogg, webm)
-    - model: Model to use (sensevoice, paraformer, fun-asr-nano)
+    - model: Model to use (sensevoice, paraformer, fun-asr-nano, moss-transcribe-diarize)
     - language: Optional language hint
     - response_format: json or verbose_json
     """
+    model = resolve_openai_transcription_model(model)
+
     # Validate model
     if model not in MODEL_CONFIGS:
         raise HTTPException(
@@ -191,8 +210,9 @@ def main():
     parser.add_argument("--model", default="sensevoice", help="Pre-load model at startup")
     args = parser.parse_args()
 
-    global DEVICE
+    global DEFAULT_MODEL, DEVICE
     DEVICE = args.device
+    DEFAULT_MODEL = args.model
 
     # Pre-load default model
     load_model(args.model)

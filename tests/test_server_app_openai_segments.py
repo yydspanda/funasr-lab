@@ -237,6 +237,29 @@ def test_verbose_json_reports_sensevoice_detected_language(monkeypatch):
     ]
 
 
+def test_n8n_whisper_model_alias_uses_preloaded_model(monkeypatch):
+    module = load_server_app(monkeypatch)
+    DummyAutoModel = install_dummy_funasr(monkeypatch)
+    monkeypatch.setattr(module.sf, "info", lambda path: types.SimpleNamespace(duration=1.25))
+    app = module.create_app(device="cpu", preload_model="sensevoice")
+    transcribe = app.routes[("POST", "/v1/audio/transcriptions")]
+
+    response = asyncio.run(
+        transcribe(
+            file=DummyUpload(),
+            model="whisper-1",
+            language=None,
+            response_format="json",
+            spk=False,
+        )
+    )
+
+    assert response == {"text": "transcript"}
+    assert [instance["model"] for instance in DummyAutoModel.instances] == [
+        "iic/SenseVoiceSmall"
+    ]
+
+
 def test_openai_verbose_json_preserves_speaker_labels(monkeypatch):
     module = load_server_app(monkeypatch)
 
@@ -440,6 +463,53 @@ def test_spk_request_lazily_loads_and_reuses_speaker_model(monkeypatch):
         (16000, "iic/speech_eres2netv2_sv_zh-cn_16k-common", "cpu"),
         (16000, "iic/speech_eres2netv2_sv_zh-cn_16k-common", "cpu"),
     ]
+
+
+def test_moss_service_uses_pinned_joint_transcription_config(monkeypatch):
+    module = load_server_app(monkeypatch)
+    DummyAutoModel = install_dummy_funasr(monkeypatch)
+
+    module.create_app(device="cuda:0", preload_model="moss-transcribe-diarize")
+
+    config = DummyAutoModel.instances[-1]
+    assert config["model"] == "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+    assert config["model_revision"] == "e8681d68e7042738ffca8ac8212bc8fcb1131ab8"
+    assert config["hub"] == "hf"
+    assert config["backend"] == "hf"
+    assert config["trust_remote_code"] is True
+    assert "vad_model" not in config
+    assert "spk_model" not in config
+
+
+def test_moss_verbose_json_preserves_native_speaker_segments(monkeypatch):
+    module = load_server_app(monkeypatch)
+    DummyAutoModel = install_dummy_funasr(
+        monkeypatch,
+        generated_result={
+            "text": "hello again",
+            "sentence_info": [
+                {"start": 100, "end": 900, "spk": "S01", "text": "hello"},
+                {"start": 950, "end": 1700, "spk": "S02", "sentence": "again"},
+            ],
+        },
+    )
+    monkeypatch.setattr(module.sf, "info", lambda path: types.SimpleNamespace(duration=1.7))
+    app = module.create_app(device="cuda:0", preload_model="moss-transcribe-diarize")
+    transcribe = app.routes[("POST", "/v1/audio/transcriptions")]
+
+    response = asyncio.run(
+        transcribe(
+            file=DummyUpload(),
+            model="moss-transcribe-diarize",
+            language=None,
+            response_format="verbose_json",
+            spk=True,
+        )
+    )
+
+    assert [segment["speaker"] for segment in response["segments"]] == ["S01", "S02"]
+    assert [segment["text"] for segment in response["segments"]] == ["hello", "again"]
+    assert not any(config.get("model") == "cam++" for config in DummyAutoModel.instances)
 
 
 def test_server_versions_follow_package_version(monkeypatch):

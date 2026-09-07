@@ -193,7 +193,7 @@ def _merge_timestamp_units(text, words, timestamps, punc_array, punc_model):
         return None
 
     def normalize(value):
-        return "".join(value.split()).casefold()
+        return "".join(value.split()).replace("▁", "").casefold()
 
     if len(words) != len(timestamps):
         return None
@@ -1170,6 +1170,7 @@ class AutoModel:
                             {
                                 "start": vadsegment[0],
                                 "end": vadsegment[1],
+                                "text": rest["text"],
                                 "sentence": rest["text"],
                                 "timestamp": ts,
                             }

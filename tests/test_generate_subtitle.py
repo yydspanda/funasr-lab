@@ -68,6 +68,7 @@ def test_generate_subtitle_requests_sentence_timestamps_and_writes_segmented_srt
     module.main()
 
     assert captured["model_kwargs"]["punc_model"] == "ct-punc"
+    assert captured["model_kwargs"]["vad_kwargs"] == {"max_single_segment_time": 60000}
     assert captured["generate_kwargs"]["language"] == "zh"
     assert captured["generate_kwargs"]["sentence_timestamp"] is True
     assert captured["generate_kwargs"]["output_timestamp"] is True

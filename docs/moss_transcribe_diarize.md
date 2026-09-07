@@ -6,13 +6,16 @@ This guide connects the third-party
 [OpenMOSS/MOSS-Transcribe-Diarize](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize)
 model to the FunASR deployment ecosystem. The model is published by OpenMOSS
 under Apache-2.0; it is not a FunASR model. FunASR provides an adapter for its
-public Transformers and vLLM interfaces while retaining the OpenMOSS model
-name, license, and upstream revision.
+public Transformers, vLLM, and SGLang Omni interfaces while retaining the
+OpenMOSS model name, license, and upstream revision.
 
 MOSS-Transcribe-Diarize jointly generates transcription, timestamps, and
 speaker labels such as `[S01]`. An application therefore does not need to
 assemble an external VAD, ASR, and diarization pipeline. This is a deployment
 property, not a claim that the model has no internal segmentation or chunking.
+The labels are anonymous within a recording: `[S01]` does not identify a known
+person, verify an enrolled voiceprint, or necessarily map to `[S01]` in another
+recording.
 
 ## Pinned sources
 
@@ -33,7 +36,7 @@ floating model revision in a production service.
 Use an isolated Python 3.10+ environment with Transformers 5.6 or newer for
 the local backend. MOSS performs long-form transcription and speaker
 diarization in one generation, so do **not** pass `vad_model` or `spk_model`.
-External VAD segmentation would break the model's global speaker identity
+External VAD segmentation would break consistent anonymous speaker assignment
 across chunks.
 
 ```python
@@ -94,6 +97,57 @@ the pinned vLLM revision. The compatibility default remains `json` so existing
 clients keep the exact tagged generation in `raw_text`; in structured mode,
 `raw_text` is the cleaned `text` returned by vLLM and the authoritative speaker
 metadata is in `sentence_info`.
+
+## FunASR OpenAI-compatible service
+
+The built-in offline HTTP service exposes the same normalized result through
+`/v1/audio/transcriptions`. It loads the pinned Transformers revision and does
+not attach an external VAD or speaker model:
+
+```bash
+python -m pip install "transformers>=5.6,<6" fastapi uvicorn python-multipart
+funasr-server --model moss-transcribe-diarize --device cuda:0 --port 8000
+
+curl -fsS http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F file=@meeting.wav \
+  -F model=moss-transcribe-diarize \
+  -F response_format=verbose_json
+```
+
+The response contains `text`, audio `duration`, and `segments` with `start`,
+`end`, `text`, and anonymous `speaker` labels. The request does not need
+`spk=true`; if a generic client sends it, the service still uses MOSS's native
+labels and does not start a second diarization pipeline.
+
+### Open WebUI
+
+[Open WebUI](https://github.com/open-webui/open-webui) can use this service as
+an OpenAI-compatible speech-to-text provider. In **Admin Panel > Settings >
+Audio**, select the OpenAI STT engine, set **OpenAI API Base URL** to
+`http://funasr:8000/v1` (or the reachable host address), select
+`moss-transcribe-diarize`, and keep the request format as `multipart`. Open
+WebUI then sends the selected model, optional language, and complete audio file
+to `/v1/audio/transcriptions`.
+
+MOSS remains an offline long-form model: this enables file transcription in
+Open WebUI, not a realtime microphone/WebSocket diarization path.
+
+For a reproducible GPU container, build from the repository root with
+`examples/openai_api/docker-compose.moss.yml`. Kubernetes operators can build
+the same `funasr-moss-api:local` image and apply
+`examples/openai_api/kubernetes/funasr-moss-api.yaml`; replace the local image
+reference with the immutable digest from their registry before rollout.
+
+MOSS is an offline long-form model, so it is not exposed by FunASR's realtime
+WebSocket service. Use the HTTP endpoint for complete files. FunClip consumes
+the same `sentence_info` contract for speaker-aware subtitles and clips.
+
+The built-in service path was reproduced on one H100 80GB with Transformers
+`5.16.0.dev0` and Torch `2.11.0+cu130`. The pinned model processed the bundled
+6.000-second sample (`ea03e1f473ad1618a03da3327a545369cb8f6f06cb0f4115535e5a866167d47e`)
+through the real HTTP endpoint and returned one non-empty monotonic segment
+labelled `S01`, with `duration=6.0`. This is a functional service-contract
+smoke, not an accuracy, throughput, concurrency, or production-capacity claim.
 
 ## Choose a serving path
 
@@ -260,6 +314,16 @@ Follow the pinned upstream SGLang Omni installation guide for CUDA 13, then
 download the immutable model snapshot and serve the local directory:
 
 ```bash
+git clone https://github.com/sgl-project/sglang-omni.git
+git -C sglang-omni checkout 3f819f9cdae3d4eeec22f73306c9067a1ec2542e
+```
+
+This source pin includes the transcription API's `max_new_tokens` forwarding.
+The original #914 merge predates that request field, so it is not sufficient
+for the long-audio command below even though its published H100 benchmark
+remains useful upstream evidence.
+
+```bash
 hf download OpenMOSS-Team/MOSS-Transcribe-Diarize \
   --revision e8681d68e7042738ffca8ac8212bc8fcb1131ab8 \
   --local-dir .models/moss-transcribe-diarize
@@ -281,8 +345,43 @@ curl -fsS http://127.0.0.1:8898/v1/audio/transcriptions \
   -F response_format=verbose_json
 ```
 
-Verify every segment has start/end timing, text, and the expected speaker
-field before wiring the response into subtitles, meeting notes, or analytics.
+Verify every segment has start/end timing and non-empty text. In SGLang Omni's
+current `verbose_json` contract, the speaker identifier is retained as the
+`[Sxx]` prefix in `segments[].text`; it is not a separate `speaker` field.
+Parse and validate that prefix before wiring the response into subtitles,
+meeting notes, or analytics.
+
+The FunASR adapter performs that validation and maps the official SGLang
+segments into the same `sentence_info` contract as the HF and vLLM paths:
+
+```python
+from funasr import AutoModel
+
+model = AutoModel(
+    model="OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    backend="sglang",
+    sglang_base_url="http://127.0.0.1:8898/v1",
+    sglang_model="OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    max_new_tokens=65536,
+    disable_update=True,
+)
+result = model.generate(input="audio.wav", max_new_tokens=65536)[0]
+for segment in result["sentence_info"]:
+    print(segment["start"], segment["end"], segment["spk"], segment["text"])
+```
+
+Do not pass `vad_model` or `spk_model`: MOSS performs segmentation and
+anonymous speaker attribution jointly, and external splitting can destroy
+speaker consistency across long turns. The adapter preserves the upstream
+tagged transcript in `raw_text`, strips only the validated `[Sxx]` prefix from
+each normalized segment, and fails closed if SGLang omits that prefix.
+
+The native runtime was merged in SGLang Omni
+[#914](https://github.com/sgl-project/sglang-omni/pull/914). Its single-H100
+Seed-TTS EN benchmark completed 1088/1088 clips with no request failures. WER
+was measured only after removing timestamp and speaker markup from
+single-speaker English clips, so it does not evaluate diarization or timestamp
+accuracy and is not a production capacity promise.
 
 ## Production validation
 

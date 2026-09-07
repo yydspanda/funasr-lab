@@ -362,6 +362,48 @@ for (const viewport of [
   });
 }
 
+for (const language of ['zh', 'en']) {
+  test(`vLLM limitation preserves full revision and wraps on mobile (${language})`, async ({ page }, testInfo) => {
+    const revision = 'a4362c943d48951f98ca2a62181cc028970270c5';
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${language === 'en' ? '/en' : ''}/deploy/vllm.html`);
+    await page.evaluate(() => document.fonts.ready);
+
+    const heading = page.locator('.limitation-callout h2');
+    await expect(heading).toHaveText(language === 'en' ? 'Known limitations' : '已知限制');
+    const summary = page.locator('.limitation-callout p.limitation-summary');
+    await expect(summary).toContainText(revision);
+    await summary.scrollIntoViewIfNeeded();
+    const layout = await summary.evaluate((node, revision) => {
+      const text = node.firstChild!;
+      const start = text.textContent!.indexOf(revision);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + revision.length);
+      const bounds = node.getBoundingClientRect();
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        summaryOverflow: node.scrollWidth - node.clientWidth,
+        summaryLeft: bounds.left,
+        summaryRight: bounds.right,
+        fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+        revisionRects: [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top })),
+      };
+    }, revision);
+    await testInfo.attach('limitation-layout', { body: JSON.stringify(layout), contentType: 'application/json' });
+    await page.screenshot({ path: testInfo.outputPath(`vllm-limitation-${language}-mobile.png`), fullPage: true });
+    await page.locator('.limitation-callout').screenshot({ path: testInfo.outputPath(`vllm-limitation-${language}-callout.png`) });
+
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(layout.summaryOverflow).toBeLessThanOrEqual(1);
+    expect(layout.fontSize).toBeLessThanOrEqual(18);
+    expect(new Set(layout.revisionRects.map(rect => Math.round(rect.top))).size).toBeGreaterThan(1);
+    expect(layout.revisionRects.every(rect =>
+      rect.left >= layout.summaryLeft - 1 && rect.right <= layout.summaryRight + 1,
+    )).toBe(true);
+  });
+}
+
 test('reduced motion disables smooth scrolling', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/en/');
@@ -373,18 +415,20 @@ for (const viewport of [
   { name: 'mobile', width: 390, height: 844 },
   { name: 'desktop', width: 1440, height: 900 },
 ]) {
-  test(`v1.4.5 release discovery is stable at ${viewport.name}`, async ({ page }, testInfo) => {
+  test(`FunClip v2.2.0 MOSS release discovery is stable at ${viewport.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     for (const release of [
       {
         language: 'zh',
         index: '/blog/',
-        article: '/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
+        article: '/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+        previous: '/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
       },
       {
         language: 'en',
         index: '/en/blog/',
-        article: '/en/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
+        article: '/en/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+        previous: '/en/blog/funasr-v1-4-5-pypi-llama-cpp-release.html',
       },
     ]) {
       await page.goto(release.index);
@@ -392,18 +436,22 @@ for (const viewport of [
         page.locator(`.launch-feature a[href="${release.article}"]`),
       ).toBeVisible();
       const history = page.locator('.previous-release .post-card');
-      await expect(history).toHaveCount(3);
+      await expect(history).toHaveCount(4);
+      await expect(
+        page.locator(`.previous-release a[href="${release.previous}"]`),
+      ).toBeVisible();
       const indexLayout = await history.evaluateAll((cards) => ({
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         rows: new Set(cards.map((card) => Math.round(card.getBoundingClientRect().top))).size,
       }));
       expect(indexLayout.overflow).toBeLessThanOrEqual(1);
-      expect(indexLayout.rows).toBe(viewport.name === 'mobile' ? 3 : 1);
+      expect(indexLayout.rows).toBe(viewport.name === 'mobile' ? 4 : 1);
 
       await page.goto(release.article);
-      await expect(page.locator('h1')).toContainText('FunASR v1.4.5');
-      await expect(page.getByText('funasr[knf]==1.4.5', { exact: false })).toBeVisible();
-      await expect(page.getByText('runtime-llamacpp-v0.2.1', { exact: false })).toBeVisible();
+      await expect(page.locator('h1')).toContainText('FunClip v2.2.0');
+      await expect(page.getByText('OpenMOSS-Team/MOSS-Transcribe-Diarize', { exact: false }).first()).toBeVisible();
+      await expect(page.getByText('/v1/audio/transcriptions', { exact: false }).first()).toBeVisible();
+      await expect(page.locator('img[src="/img/funclip-v2-1-0-interface.jpg"]')).toBeVisible();
 
       const articleLayout = await page.evaluate(() => {
         const navigation = document.querySelector<HTMLElement>('nav.nav');
@@ -419,7 +467,7 @@ for (const viewport of [
 
       await page.screenshot({
         path: testInfo.outputPath(
-          `v1.4.5-release-${release.language}-${viewport.name}.png`,
+          `funclip-v2.2.0-moss-${release.language}-${viewport.name}.png`,
         ),
         fullPage: true,
       });
@@ -432,7 +480,7 @@ test('llama.cpp blog heading clears fixed navigation on mobile', async ({ page }
   await page.goto('/blog/funasr-llama-cpp-whisper-cpp-alternative.html');
 
   const layout = await page.evaluate(() => {
-    const navigation = document.querySelector<HTMLElement>('nav.nav');
+    const navigation = document.querySelector<HTMLElement>('.site-header');
     const heading = document.querySelector<HTMLElement>('h1');
     return {
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -457,7 +505,7 @@ test('legacy comparison pages keep accurate claims and fit mobile', async ({ pag
     const audit = await page.evaluate(() => ({
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       text: document.body.innerText,
-      trackedGitHub: document.querySelector('.nav-btn')?.getAttribute('href'),
+      trackedGitHub: document.querySelector('.site-header a[aria-label="GitHub"]')?.getAttribute('href'),
     }));
 
     expect(audit.overflow).toBeLessThanOrEqual(1);
@@ -498,6 +546,34 @@ test('SenseVoice guides keep mobile navigation clear of the article', async ({ p
 
   await page.screenshot({
     path: testInfo.outputPath('sensevoice-guide-mobile.png'),
+    fullPage: true,
+  });
+});
+
+test('FunASR v1.4.14 release hashes wrap on mobile', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  for (const route of [
+    '/blog/funasr-v1-4-14-portable-source-release.html',
+    '/en/blog/funasr-v1-4-14-portable-source-release.html',
+  ]) {
+    await page.goto(route);
+    await expect(page.locator('h1')).toContainText('v1.4.14');
+    const layout = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      assetCount: document.body.innerText.includes('13'),
+      blackwell: document.querySelector<HTMLAnchorElement>(
+        'a[href*="v1.4.14/funasr-llamacpp-windows-x64-cuda-blackwell.zip"]',
+      )?.href,
+    }));
+
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(layout.assetCount).toBe(true);
+    expect(layout.blackwell).toContain('v1.4.14');
+  }
+
+  await page.screenshot({
+    path: testInfo.outputPath('v1.4.14-release-mobile.png'),
     fullPage: true,
   });
 });

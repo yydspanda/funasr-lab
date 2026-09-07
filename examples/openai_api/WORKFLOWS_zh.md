@@ -25,6 +25,10 @@ curl -fsS "$FUNASR_BASE_URL/v1/models"
 
 在配置低代码工具前，可以先导入 [Postman collection](POSTMAN_zh.md)，从图形界面跑通 health、模型列表和转写请求；需要按 schema 导入时可使用 [OpenAPI spec](OPENAPI_zh.md)。设置 `FUNASR_BASE_URL`，在 multipart `file` 字段选择本地音频文件，第一次测试建议保持 `MODEL_ALIAS=sensevoice`。
 
+处理离线多人会议时，将 `MODEL_ALIAS` 改为 `moss-transcribe-diarize`，并保留
+`response_format=verbose_json`，下游节点即可收到模型原生匿名说话人 segments。
+独立 GPU 服务与文件时长边界见 [MOSS 部署指南](../../docs/moss_transcribe_diarize_zh.md)。
+
 ## Multipart HTTP 请求
 
 所有工作流引擎最终都需要发出下面这种请求：
@@ -116,6 +120,14 @@ def transcribe_from_url(audio_url: str) -> dict:
 | Timeout | 长录音场景需要调大。 |
 
 请求之后，使用 `{{$json.text}}` 作为转写文本。如果启用了 `verbose_json`，可以把 `{{$json.segments}}` 传给字幕、说话人分析或质检节点。
+
+### n8n OpenAI Audio 节点
+
+也可以让内置 OpenAI 节点的 Audio > Transcribe 操作调用 FunASR。在 OpenAI
+凭据中将 Base URL 设为 `http://<funasr-host>:8000/v1`，并填写任意非空 API
+key。该节点固定发送 `model=whisper-1`，FunASR 会将这个兼容别名映射到服务
+启动时选择的模型。此路径只返回转写文本；需要 `verbose_json`、分段或说话人
+标签时，仍使用上面的 HTTP Request 节点。
 
 ## Webhook worker 模式
 

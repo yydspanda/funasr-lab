@@ -69,6 +69,35 @@ def test_homepage_routes_each_project_by_workload(built_site, relative, markers)
         assert marker in text
 
 
+@pytest.mark.parametrize(
+    ('relative', 'heading', 'routes'),
+    (
+        (
+            'index.html',
+            '为你的应用，选对模型。',
+            ('/go/fun-asr', '/go/sensevoice', '/go/funclip', '/docs/moss-transcribe-diarize.html'),
+        ),
+        (
+            'en/index.html',
+            'The right model for your application.',
+            ('/go/fun-asr', '/go/sensevoice', '/go/funclip', '/en/docs/moss-transcribe-diarize.html'),
+        ),
+    ),
+)
+def test_homepage_surfaces_focused_repository_router_before_deployment_choice(
+    built_site, relative, heading, routes
+):
+    soup = read_soup(built_site / relative)
+    router = soup.select_one('[data-section="repository-router"]')
+    selector = soup.select_one('[data-section="deployment-selector"]')
+
+    assert router
+    assert selector
+    assert router.get_text(' ', strip=True).find(heading) >= 0
+    assert list(soup.select('section')).index(router) < list(soup.select('section')).index(selector)
+    assert tuple(link['href'] for link in router.select('a[href]')) == routes
+
+
 def test_every_deployment_page_has_operational_contract(built_site):
     registry = load_registry(SITE_ROOT / 'data' / 'deployments.json')
 
@@ -126,6 +155,28 @@ def test_detail_commands_come_from_registry(built_site):
         rendered = soup.get_text('\n')
         for command in entry['commands']['smoke']:
             assert command in rendered
+
+
+def test_moss_detail_renders_all_service_runtime_paths(built_site):
+    for relative in (
+        'deploy/moss-transcribe-diarize.html',
+        'en/deploy/moss-transcribe-diarize.html',
+    ):
+        soup = read_soup(built_site / relative)
+        paths = soup.select('[data-runtime-path]')
+
+        assert [path['data-runtime-path'] for path in paths] == [
+            'funasr-server',
+            'vllm',
+            'sglang-omni',
+        ]
+        rendered = '\n'.join(path.get_text('\n') for path in paths)
+        assert 'funasr-server --model moss-transcribe-diarize' in rendered
+        assert 'docker-compose.moss.yml' in rendered
+        assert 'vllm serve OpenMOSS-Team/MOSS-Transcribe-Diarize' in rendered
+        assert 'sgl-omni serve' in rendered
+        assert 'response_format=diarized_json' in rendered
+        assert 'response_format=verbose_json' in rendered
 
 
 def test_realtime_page_publishes_verified_v142_quickstart(built_site):
@@ -298,8 +349,8 @@ def test_old_llama_routes_point_to_product_pages(built_site):
     ):
         soup = read_soup(built_site / relative)
         assert soup.select_one('link[rel="canonical"]')['href'].endswith(expected)
-        assert soup.select_one('.nav-links a[href$="/deploy/"]') or soup.select_one(
-            '.nav-links a[href$="/en/deploy/"]'
+        assert soup.select_one('[data-primary-nav] a[href$="/deploy/"]') or soup.select_one(
+            '[data-primary-nav] a[href$="/en/deploy/"]'
         )
 
 
@@ -312,6 +363,32 @@ def test_model_pages_use_attributed_repository_routes(built_site, relative):
     assert '/go/sensevoice' in hrefs
     assert 'https://github.com/QwenAudio/Fun-ASR' not in hrefs
     assert 'https://github.com/QwenAudio/SenseVoice' not in hrefs
+
+
+@pytest.mark.parametrize(
+    ('relative', 'third_party_marker'),
+    (
+        ('models.html', '第三方模型'),
+        ('en/models.html', 'third-party model'),
+    ),
+)
+def test_model_pages_surface_moss_with_accurate_ownership_and_deployment(
+    built_site, relative, third_party_marker
+):
+    soup = read_soup(built_site / relative)
+    card = next(
+        item
+        for item in soup.select('.model-card')
+        if 'MOSS-Transcribe-Diarize' in item.get_text(' ', strip=True)
+    )
+    text = card.get_text(' ', strip=True)
+    hrefs = {link.get('href') for link in card.select('a[href]')}
+
+    assert 'OpenMOSS-Team/MOSS-Transcribe-Diarize' in text
+    assert third_party_marker in text
+    assert 'VAD' in text
+    assert 'https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize' in hrefs
+    assert ('/deploy/moss-transcribe-diarize.html' if relative == 'models.html' else '/en/deploy/moss-transcribe-diarize.html') in hrefs
 
 
 @pytest.mark.parametrize('relative', ('ecosystem.html', 'en/ecosystem.html'))
@@ -400,7 +477,7 @@ def test_ecosystem_refresh_tracks_current_release_and_merged_native_runtime(
     soup = read_soup(built_site / relative)
     text = soup.get_text(' ', strip=True)
 
-    assert '36K+' in text
+    assert '37K+' in text
     assert soup.select_one(
         'a[href="https://github.com/modelscope/FunClip/releases/tag/v2.1.1"]'
     )
@@ -593,22 +670,123 @@ def test_v1_4_3_release_blog_is_bilingual_and_verifiable(
 
 
 @pytest.mark.parametrize(
-    ('relative', 'href'),
+    ('relative', 'peer', 'markers'),
     (
-        ('blog/index.html', '/blog/funasr-v1-4-5-pypi-llama-cpp-release.html'),
-        ('en/blog/index.html', '/en/blog/funasr-v1-4-5-pypi-llama-cpp-release.html'),
+        (
+            'blog/funasr-v1-4-14-portable-source-release.html',
+            '/en/blog/funasr-v1-4-14-portable-source-release.html',
+            (
+                'FunASR v1.4.14',
+                '可移植源码包',
+                'MOSS-Transcribe-Diarize',
+                '13 个 v1.4.14 资产',
+                '10 个镜像运行时',
+                '含 Blackwell 运行时',
+                'SHA256SUMS',
+            ),
+        ),
+        (
+            'en/blog/funasr-v1-4-14-portable-source-release.html',
+            '/blog/funasr-v1-4-14-portable-source-release.html',
+            (
+                'FunASR v1.4.14',
+                'Portable Source Archives',
+                'MOSS-Transcribe-Diarize',
+                '13 v1.4.14 assets',
+                '10 mirrored runtimes',
+                'including the Blackwell runtime',
+                'SHA256SUMS',
+            ),
+        ),
+    ),
+)
+def test_v1_4_14_release_blog_is_bilingual_and_verifiable(
+    built_site, relative, peer, markers
+):
+    soup = read_soup(built_site / relative)
+    text = soup.get_text(' ', strip=True)
+
+    assert soup.select_one('link[rel="canonical"]')['href'].endswith('/' + relative)
+    assert soup.select_one(f'link[rel="alternate"][href$="{peer}"]')
+    assert soup.select_one('script[type="application/ld+json"]')
+    assert soup.select_one('a[href="https://github.com/modelscope/FunASR/releases/tag/v1.4.14"]')
+    assert soup.select_one('a[href="https://pypi.org/project/funasr/1.4.14/"]')
+    assert soup.select_one(
+        'a[href="https://github.com/modelscope/FunASR/releases/tag/runtime-llamacpp-v0.2.6"]'
+    )
+    assert soup.select_one(
+        'a[href="https://github.com/modelscope/FunASR/releases/download/'
+        'v1.4.14/funasr-llamacpp-windows-x64-cuda-blackwell.zip"]'
+    )
+    for marker in markers:
+        assert marker in text
+
+    root = ET.parse(built_site / 'sitemap.xml').getroot()
+    namespace = {'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+    urls = {
+        item.findtext('sitemap:loc', namespaces=namespace)
+        for item in root.findall('sitemap:url', namespace)
+    }
+    assert f'https://www.funasr.com/{relative}' in urls
+
+
+@pytest.mark.parametrize(
+    ('relative', 'feature_href', 'history_href'),
+    (
+        (
+            'blog/index.html',
+            '/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/blog/funasr-v1-4-14-portable-source-release.html',
+        ),
+        (
+            'en/blog/index.html',
+            '/en/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/en/blog/funasr-v1-4-14-portable-source-release.html',
+        ),
     ),
 )
 def test_blog_index_features_latest_release_and_preserves_history(
-    built_site, relative, href
+    built_site, relative, feature_href, history_href
 ):
     soup = read_soup(built_site / relative)
-    feature = soup.select_one(f'.launch-feature a[href="{href}"]')
+    feature = soup.select_one(f'.launch-feature a[href="{feature_href}"]')
 
     assert feature
-    assert 'v1.4.5' in feature.get_text(' ', strip=True)
+    assert 'FunClip v2.2.0' in feature.get_text(' ', strip=True)
     history = soup.select_one('.previous-release')
     assert history
+    assert history.select_one(f'a[href="{history_href}"]')
     history_text = history.get_text(' ', strip=True)
+    assert 'v1.4.14' in history_text
+    assert 'v1.4.5' in history_text
     assert 'v1.4.3' in history_text
     assert 'v1.4.0' in history_text
+
+
+@pytest.mark.parametrize(
+    ('relative', 'peer', 'guide'),
+    (
+        (
+            'blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/en/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/deploy/moss-transcribe-diarize.html',
+        ),
+        (
+            'en/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/blog/funclip-v2-2-0-moss-speaker-clipping.html',
+            '/en/deploy/moss-transcribe-diarize.html',
+        ),
+    ),
+)
+def test_funclip_v220_blog_builds_with_real_media_and_product_routes(
+    built_site, relative, peer, guide
+):
+    soup = read_soup(built_site / relative)
+    assert soup.select_one(f'link[rel="alternate"][href$="{peer}"]')
+    image = soup.select_one('article img[src]')
+    assert image
+    assert (built_site / image['src'].lstrip('/')).is_file()
+    assert soup.select_one(f'a[href="{guide}"]')
+    assert soup.select_one(
+        'a[href="https://github.com/modelscope/FunClip/releases/tag/v2.2.0"]'
+    )
