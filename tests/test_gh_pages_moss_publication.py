@@ -31,6 +31,6 @@ def test_github_pages_moss_source_is_versioned_and_discoverable():
         assert "MOSS-Transcribe-Diarize" in content
 
     workflow = (ROOT / ".github/workflows/update-api-docs.yml").read_text()
-    assert "docs/moss_transcribe_diarize*.md" in workflow
+    assert "docs/**/*.md" in workflow
     assert "model_zoo/**" in workflow
     assert "gh-pages-output/**" in workflow

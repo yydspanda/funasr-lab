@@ -27,7 +27,7 @@
 | Environment | Bootstrap and CI are CPU-first; model downloads and training runs are explicit, separately recorded actions |
 | Evidence | No quality or speed claim is promotable before full commits, every model/config/data hash, structured hardware, complete command, and report hash are recorded; sealed CPU RTF/RSS additionally requires the runner-owned execution envelope and complete receipt chain |
 | EVAL-01 reality | The controlled CPU replay/evidence path is implemented, but real `LAB-SEED-001` consent/access evidence, dedup report, audio, references, descriptor, split manifests, and candidate are absent; no sealed CER/MER/RTF/RSS, GPU-capacity, service-capacity, or product-readiness result exists |
-| Sync exclusions | The accepted snapshot reports package version 1.4.14 but is 23 commits after tag `v1.4.14`; Paraformer BPE timestamp output, MOSS/Nano accelerators, and upstream Nano realtime/service demos remain unqualified and are not substitutes for the planned Chinese CharTokenizer, native-streaming, or `SERVE-01` tracks |
+| Sync exclusions | The accepted snapshot reports package version 1.4.14 but is 23 commits after tag `v1.4.14`; cached Paraformer timestamp output was single/batch stable but exposed a `-90 ms` boundary and the BPE path remains unqualified; MOSS/Nano accelerators and upstream Nano realtime/service demos are not substitutes for the planned content, native-streaming, or `SERVE-01` tracks |
 | Remote enforcement | Both governance workflows run on push and weekly schedule; `develop` has no branch protection/ruleset, so direct writers can still bypass failed checks |
 
 ## Recent Completion Records
