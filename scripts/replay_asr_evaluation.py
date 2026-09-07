@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export or score one sealed EVAL-01 custodian replay.
+"""Export, score, or finalize one sealed EVAL-01 custodian replay.
 
 The command is deliberately split into a reference-free decoder handoff,
 prediction freezing, and restricted scoring. It never exposes sealed
@@ -247,7 +247,13 @@ def _secure_project_imports() -> None:
         or process_argv[1:4]
         != ["-P", "-S", "scripts/replay_asr_evaluation.py"]
         or process_argv[4]
-        not in {"export-input", "freeze-predictions", "score", "validate-terminal"}
+        not in {
+            "export-input",
+            "freeze-predictions",
+            "score",
+            "finalize-terminal",
+            "validate-terminal",
+        }
     ):
         raise SystemExit("custodian requires exact direct process argv")
     if any(
@@ -287,6 +293,7 @@ elif str(REPOSITORY_ROOT) not in sys.path:
 
 from eval.collection import CollectionValidationError
 from eval.collection import build_sealed_input_projection
+from eval.collection import canonical_json_bytes
 from eval.collection import load_collection_descriptor
 from eval.collection import load_validated_collection
 from eval.collection import sha256_bytes
@@ -301,10 +308,12 @@ from eval.custodian_replay import INPUT_EXPORT_RECEIPT_KIND
 from eval.custodian_replay import PREDICTION_FREEZE_RECEIPT_KIND
 from eval.custodian_replay import RECEIPT_SCHEMA_VERSION
 from eval.custodian_replay import SEALED_SPLIT
+from eval.custodian_replay import TERMINAL_EVIDENCE_ROLES
 from eval.custodian_replay import CustodianReplayError
 from eval.custodian_replay import LoadedArtifact
 from eval.custodian_replay import build_candidate_lock
 from eval.custodian_replay import build_prediction_bundle
+from eval.custodian_replay import build_terminal_candidate_manifest
 from eval.custodian_replay import canonical_candidate_lock_bytes
 from eval.custodian_replay import canonical_custodian_receipt_bytes
 from eval.custodian_replay import canonical_prediction_bundle_bytes
@@ -329,6 +338,7 @@ from eval.custodian_replay import validate_replay_collection
 from eval.custodian_replay import validate_restricted_input_paths
 from eval.custodian_replay import validate_restricted_transition_paths
 from eval.custodian_replay import validate_registered_candidate_binding
+from eval.custodian_replay import validate_terminal_artifact_inventory
 from eval.custodian_replay import validate_terminal_manifest_for_receipt
 from eval.custodian_replay import write_atomic_outputs
 from eval.execution_envelope import ExecutionEnvelopeError
@@ -397,6 +407,18 @@ def _collection_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _terminal_evidence_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--input-projection", type=Path, required=True)
+    parser.add_argument("--candidate-lock", type=Path, required=True)
+    parser.add_argument("--input-receipt", type=Path, required=True)
+    parser.add_argument("--raw-predictions", type=Path, required=True)
+    parser.add_argument("--predictions", type=Path, required=True)
+    parser.add_argument("--execution-envelope", type=Path, required=True)
+    parser.add_argument("--prediction-receipt", type=Path, required=True)
+    parser.add_argument("--core", type=Path, required=True)
+    parser.add_argument("--score-receipt", type=Path, required=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the offline, sealed-reference ASR custodian workflow."
@@ -460,15 +482,28 @@ def build_parser() -> argparse.ArgumentParser:
     score_parser.add_argument("--output-core", type=Path, required=True)
     score_parser.add_argument("--output-receipt", type=Path, required=True)
 
+    finalize_parser = subparsers.add_parser(
+        "finalize-terminal",
+        help="Derive and atomically publish one private terminal manifest.",
+    )
+    _terminal_evidence_arguments(finalize_parser)
+    finalize_parser.add_argument(
+        "--decision",
+        choices=("accept", "reject", "investigate"),
+        required=True,
+        help="Explicit custodian decision; metrics are always derived from evidence.",
+    )
+    finalize_parser.add_argument(
+        "--output-terminal-manifest",
+        type=Path,
+        required=True,
+    )
+
     terminal_parser = subparsers.add_parser(
         "validate-terminal",
-        help="Silently validate one private terminal evidence chain.",
+        help="Silently revalidate one complete private terminal evidence chain.",
     )
-    terminal_parser.add_argument("--input-receipt", type=Path, required=True)
-    terminal_parser.add_argument("--prediction-receipt", type=Path, required=True)
-    terminal_parser.add_argument("--score-receipt", type=Path, required=True)
-    terminal_parser.add_argument("--core", type=Path, required=True)
-    terminal_parser.add_argument("--execution-envelope", type=Path, required=True)
+    _terminal_evidence_arguments(terminal_parser)
     terminal_parser.add_argument("--terminal-manifest", type=Path, required=True)
     return parser
 
@@ -904,83 +939,328 @@ def _score(
     return receipt
 
 
+def _terminal_evidence_paths(args: argparse.Namespace) -> dict[str, Path]:
+    return {
+        "sealed_input": args.input_projection,
+        "candidate_lock": args.candidate_lock,
+        "input_export_receipt": args.input_receipt,
+        "raw_predictions": args.raw_predictions,
+        "prediction_bundle": args.predictions,
+        "execution_envelope": args.execution_envelope,
+        "prediction_freeze_receipt": args.prediction_receipt,
+        "restricted_core": args.core,
+        "score_receipt": args.score_receipt,
+    }
+
+
+def _load_terminal_evidence(paths: dict[str, Path]) -> dict[str, object]:
+    sealed_input = load_sealed_input_projection(paths["sealed_input"])
+    candidate_lock = load_candidate_lock(paths["candidate_lock"])
+    input_receipt = load_custodian_receipt(paths["input_export_receipt"])
+    raw_predictions = load_prediction_items_jsonl_artifact(
+        paths["raw_predictions"]
+    )
+    predictions = load_prediction_bundle(paths["prediction_bundle"])
+    execution_envelope = load_execution_envelope(paths["execution_envelope"])
+    prediction_receipt = load_custodian_receipt(
+        paths["prediction_freeze_receipt"]
+    )
+    core_report = load_restricted_core_report(paths["restricted_core"])
+    score_receipt = load_custodian_receipt(paths["score_receipt"])
+
+    lock_registration = validate_registered_candidate_binding(
+        candidate_lock.document
+    )
+    score_registration = validate_registered_candidate_binding(
+        score_receipt.document
+    )
+    if (
+        lock_registration.repository_path != score_registration.repository_path
+        or lock_registration.registration_commit
+        != score_registration.registration_commit
+        or lock_registration.sha256 != score_registration.sha256
+    ):
+        raise CustodianReplayError(
+            "terminal candidate registrations do not identify one planned manifest"
+        )
+    validate_raw_execution_handoff(
+        sealed_input,
+        candidate_lock,
+        input_receipt,
+        raw_predictions,
+        execution_envelope,
+    )
+    validate_prediction_freeze_receipt_handoff(
+        sealed_input,
+        candidate_lock,
+        input_receipt,
+        predictions,
+        execution_envelope,
+        prediction_receipt,
+    )
+    return {
+        "sealed_input": sealed_input,
+        "candidate_lock": candidate_lock,
+        "input_export_receipt": input_receipt,
+        "raw_predictions": raw_predictions,
+        "prediction_bundle": predictions,
+        "execution_envelope": execution_envelope,
+        "prediction_freeze_receipt": prediction_receipt,
+        "restricted_core": core_report,
+        "score_receipt": score_receipt,
+        "registered_candidate": score_registration,
+    }
+
+
+def _terminal_evidence_digests(
+    evidence: dict[str, object],
+) -> dict[str, str]:
+    return {
+        "sealed_input": evidence["sealed_input"].sha256,
+        "candidate_lock": evidence["candidate_lock"].sha256,
+        "input_export_receipt": evidence["input_export_receipt"].sha256,
+        "raw_predictions": evidence["raw_predictions"].sha256,
+        "prediction_bundle": evidence["prediction_bundle"].sha256,
+        "execution_envelope": evidence["execution_envelope"].sha256,
+        "prediction_freeze_receipt": evidence[
+            "prediction_freeze_receipt"
+        ].sha256,
+        "restricted_core": sha256_bytes(
+            canonical_core_bytes(evidence["restricted_core"])
+        ),
+        "score_receipt": evidence["score_receipt"].sha256,
+    }
+
+
+def _terminal_registration_identity(
+    evidence: dict[str, object],
+) -> tuple[str, str, str]:
+    registered = evidence["registered_candidate"]
+    return (
+        registered.repository_path,
+        registered.registration_commit,
+        registered.sha256,
+    )
+
+
+def _terminal_artifact_evidence(
+    paths: dict[str, Path],
+    evidence: dict[str, object],
+) -> dict[str, tuple[str, str]]:
+    digests = _terminal_evidence_digests(evidence)
+    return {
+        role: (paths[role].name, digests[role])
+        for role in digests
+        if role != "raw_predictions"
+    }
+
+
+def _validate_terminal_runtime_and_sources(
+    candidate: dict[str, object],
+    evidence: dict[str, object],
+    *,
+    context: str,
+    startup_scorer_runtime: dict[str, object] | None,
+    startup_scorer_identity: tuple[str, str] | None,
+) -> tuple[tuple[str, str], tuple[str, str], dict[str, object]]:
+    scorer_runtime = _scorer_runtime_identity()
+    if (
+        startup_scorer_runtime is not None
+        and scorer_runtime != startup_scorer_runtime
+    ):
+        raise CustodianReplayError(
+            f"{context} scorer runtime changed after process startup"
+        )
+    scorer_identity = _scorer_identity_for_candidate(
+        candidate,
+        startup_scorer_identity,
+        context,
+    )
+    score_receipt = evidence["score_receipt"].document
+    if scorer_identity != (
+        score_receipt["scorer_code_commit"],
+        score_receipt["scorer_source_sha256"],
+    ):
+        raise CustodianReplayError(
+            f"{context} source does not match score receipt"
+        )
+    if score_receipt.get("scorer_runtime") != scorer_runtime:
+        raise CustodianReplayError(
+            f"{context} scorer runtime does not match score receipt"
+        )
+    runner_identity = _validated_runner_source_identity(
+        candidate,
+        evidence["execution_envelope"].document,
+    )
+    return scorer_identity, runner_identity, scorer_runtime
+
+
+def _revalidate_terminal_runtime_and_sources(
+    candidate: dict[str, object],
+    evidence: dict[str, object],
+    scorer_identity: tuple[str, str],
+    runner_identity: tuple[str, str],
+    scorer_runtime: dict[str, object],
+) -> None:
+    if scorer_code_identity(code_commit=scorer_identity[0]) != scorer_identity:
+        raise CustodianReplayError(
+            "terminal custodian source identity changed during validation"
+        )
+    if _scorer_runtime_identity() != scorer_runtime:
+        raise CustodianReplayError(
+            "terminal scorer runtime changed during validation"
+        )
+    if _validated_runner_source_identity(
+        candidate,
+        evidence["execution_envelope"].document,
+    ) != runner_identity:
+        raise CustodianReplayError(
+            "terminal runner source identity changed during validation"
+        )
+
+
+def _finalize_terminal(
+    args: argparse.Namespace,
+    *,
+    startup_scorer_runtime: dict[str, object] | None = None,
+    startup_scorer_identity: tuple[str, str] | None = None,
+) -> None:
+    raw_paths = _terminal_evidence_paths(args)
+    resolved_inputs, resolved_outputs = validate_restricted_transition_paths(
+        [raw_paths[role] for role in TERMINAL_EVIDENCE_ROLES],
+        [args.output_terminal_manifest],
+    )
+    paths = dict(zip(TERMINAL_EVIDENCE_ROLES, resolved_inputs, strict=True))
+    evidence = _load_terminal_evidence(paths)
+    planned = evidence["registered_candidate"].document
+    scorer_identity, runner_identity, scorer_runtime = (
+        _validate_terminal_runtime_and_sources(
+            planned,
+            evidence,
+            context="terminal finalization",
+            startup_scorer_runtime=startup_scorer_runtime,
+            startup_scorer_identity=startup_scorer_identity,
+        )
+    )
+    artifact_evidence = _terminal_artifact_evidence(paths, evidence)
+    terminal_manifest = build_terminal_candidate_manifest(
+        planned,
+        decision=args.decision,
+        core_report=evidence["restricted_core"],
+        execution_envelope=evidence["execution_envelope"].document,
+        artifact_evidence=artifact_evidence,
+    )
+    validate_terminal_manifest_for_receipt(
+        terminal_manifest,
+        evidence["score_receipt"].document,
+        evidence["restricted_core"],
+        evidence["execution_envelope"].document,
+        evidence["input_export_receipt"].document,
+        evidence["prediction_freeze_receipt"].document,
+    )
+    validate_terminal_artifact_inventory(terminal_manifest, artifact_evidence)
+    validate_restricted_input_paths(
+        [paths[role] for role in TERMINAL_EVIDENCE_ROLES]
+    )
+    final_evidence = _load_terminal_evidence(paths)
+    if _terminal_evidence_digests(final_evidence) != _terminal_evidence_digests(
+        evidence
+    ):
+        raise CustodianReplayError(
+            "terminal evidence changed during finalization"
+        )
+    if _terminal_registration_identity(
+        final_evidence
+    ) != _terminal_registration_identity(evidence):
+        raise CustodianReplayError(
+            "registered candidate changed during terminal finalization"
+        )
+    _revalidate_terminal_runtime_and_sources(
+        planned,
+        final_evidence,
+        scorer_identity,
+        runner_identity,
+        scorer_runtime,
+    )
+    write_atomic_outputs(
+        [
+            (
+                resolved_outputs[0],
+                canonical_json_bytes(terminal_manifest),
+            )
+        ]
+    )
+
+
 def _validate_terminal(
     args: argparse.Namespace,
     *,
     startup_scorer_runtime: dict[str, object] | None = None,
     startup_scorer_identity: tuple[str, str] | None = None,
 ) -> None:
-    scorer_runtime = _scorer_runtime_identity()
-    if startup_scorer_runtime is not None and scorer_runtime != startup_scorer_runtime:
-        raise CustodianReplayError(
-            "terminal scorer runtime changed after process startup"
-        )
-    validate_restricted_input_paths(
-        [
-            args.terminal_manifest,
-            args.input_receipt,
-            args.prediction_receipt,
-            args.score_receipt,
-            args.core,
-            args.execution_envelope,
-        ]
+    raw_paths = _terminal_evidence_paths(args)
+    resolved = validate_restricted_input_paths(
+        [raw_paths[role] for role in TERMINAL_EVIDENCE_ROLES]
+        + [args.terminal_manifest]
     )
-    terminal_manifest = load_terminal_candidate_manifest(args.terminal_manifest)
-    scorer_identity = scorer_code_identity(
-        code_commit=terminal_manifest["code_commit"]
+    paths = dict(
+        zip(TERMINAL_EVIDENCE_ROLES, resolved[:-1], strict=True)
     )
-    if (
-        startup_scorer_identity is not None
-        and startup_scorer_identity != scorer_identity
-    ):
-        raise CustodianReplayError(
-            "terminal validator source identity changed after process startup"
+    terminal_manifest = load_terminal_candidate_manifest(resolved[-1])
+    evidence = _load_terminal_evidence(paths)
+    planned = evidence["registered_candidate"].document
+    scorer_identity, runner_identity, scorer_runtime = (
+        _validate_terminal_runtime_and_sources(
+            planned,
+            evidence,
+            context="terminal validation",
+            startup_scorer_runtime=startup_scorer_runtime,
+            startup_scorer_identity=startup_scorer_identity,
         )
-    input_receipt = load_custodian_receipt(args.input_receipt).document
-    prediction_receipt = load_custodian_receipt(args.prediction_receipt).document
-    score_receipt = load_custodian_receipt(args.score_receipt).document
-    validate_registered_candidate_binding(score_receipt)
-    if scorer_identity != (
-        score_receipt["scorer_code_commit"],
-        score_receipt["scorer_source_sha256"],
-    ):
-        raise CustodianReplayError(
-            "terminal validator source does not match score receipt"
-        )
-    if score_receipt.get("scorer_runtime") != scorer_runtime:
-        raise CustodianReplayError(
-            "terminal scorer runtime does not match score receipt"
-        )
-    core_report = load_restricted_core_report(args.core)
-    execution_envelope = load_execution_envelope(
-        args.execution_envelope
-    ).document
-    runner_identity = _validated_runner_source_identity(
-        terminal_manifest,
-        execution_envelope,
     )
     validate_terminal_manifest_for_receipt(
         terminal_manifest,
-        score_receipt,
-        core_report,
-        execution_envelope,
-        input_receipt,
-        prediction_receipt,
+        evidence["score_receipt"].document,
+        evidence["restricted_core"],
+        evidence["execution_envelope"].document,
+        evidence["input_export_receipt"].document,
+        evidence["prediction_freeze_receipt"].document,
     )
-    if (
-        scorer_code_identity(code_commit=scorer_identity[0])
-        != scorer_identity
+    validate_terminal_artifact_inventory(
+        terminal_manifest,
+        _terminal_artifact_evidence(paths, evidence),
+    )
+    validate_restricted_input_paths(
+        [paths[role] for role in TERMINAL_EVIDENCE_ROLES]
+        + [resolved[-1]]
+    )
+    final_terminal_manifest = load_terminal_candidate_manifest(resolved[-1])
+    final_evidence = _load_terminal_evidence(paths)
+    if canonical_json_bytes(final_terminal_manifest) != canonical_json_bytes(
+        terminal_manifest
     ):
         raise CustodianReplayError(
-            "terminal validator source identity changed during validation"
+            "terminal manifest changed during validation"
         )
-    if _validated_runner_source_identity(
-        terminal_manifest,
-        execution_envelope,
-    ) != runner_identity:
+    if _terminal_evidence_digests(final_evidence) != _terminal_evidence_digests(
+        evidence
+    ):
         raise CustodianReplayError(
-            "terminal runner source identity changed during validation"
+            "terminal evidence changed during validation"
         )
+    if _terminal_registration_identity(
+        final_evidence
+    ) != _terminal_registration_identity(evidence):
+        raise CustodianReplayError(
+            "registered candidate changed during terminal validation"
+        )
+    _revalidate_terminal_runtime_and_sources(
+        planned,
+        final_evidence,
+        scorer_identity,
+        runner_identity,
+        scorer_runtime,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -991,7 +1271,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         startup_scorer_runtime = (
             _scorer_runtime_identity()
-            if args.command in {"score", "validate-terminal"}
+            if args.command in {
+                "score",
+                "finalize-terminal",
+                "validate-terminal",
+            }
             else None
         )
         if args.command == "export-input":
@@ -1000,6 +1284,11 @@ def main(argv: list[str] | None = None) -> int:
             _freeze_predictions(args)
         elif args.command == "score":
             _score(
+                args,
+                startup_scorer_runtime=startup_scorer_runtime,
+            )
+        elif args.command == "finalize-terminal":
+            _finalize_terminal(
                 args,
                 startup_scorer_runtime=startup_scorer_runtime,
             )

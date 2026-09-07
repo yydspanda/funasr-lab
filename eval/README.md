@@ -151,10 +151,18 @@ reference-free transition:
    binds CPython, Unicode, the CPU lock, and installed-distribution inventory.
    Public release remains `withheld` until a separate authorization and
    minimum-cell policy exists.
-5. `validate-terminal` silently validates the private terminal manifest against
-   the input-export, prediction-freeze, and score receipts, restricted core,
-   and execution envelope. While release is withheld, this result-bearing copy
-   remains private and the tracked candidate manifest remains `planned`.
+5. `finalize-terminal` reopens the complete nine-file evidence chain, including
+   the raw JSONL, derives all 19 metrics from the restricted core and execution
+   envelope, and atomically writes a canonical private terminal manifest. The
+   custodian must explicitly choose `accept`, `reject`, or `investigate`; the
+   command never infers that decision from a metric and never edits the tracked
+   `planned` manifest. Its fixed eight-artifact inventory omits only the raw
+   JSONL, whose possibly empty hash remains transitively bound by the prediction
+   bundle, envelope, and receipts.
+6. `validate-terminal` silently reopens those same nine evidence files and
+   requires every inventory filename and byte hash to match before accepting
+   the private terminal manifest. While release is withheld, this result-bearing
+   copy remains private and the tracked candidate manifest remains `planned`.
 
 The candidate lock is custodian-owned; a decode worker needs the sealed input
 and the expected lock identity, not authority to edit the lock. The planned
@@ -195,9 +203,9 @@ before the receipt is published last in each custodian receipt-bearing
 transition. The runner instead publishes raw JSONL first and its execution
 envelope last; the later prediction-freeze receipt authenticates both. A core
 without its matching receipt is incomplete evidence. Successful artifact
-transitions and `validate-terminal` are silent; `describe-runtime` is the sole
-diagnostic command that prints its pre-registration facts. Stdout is never an
-authoritative receipt.
+transitions, `finalize-terminal`, and `validate-terminal` are silent;
+`describe-runtime` is the sole diagnostic command that prints its
+pre-registration facts. Stdout is never an authoritative receipt.
 
 Before publishing the input/lock/receipt transition, export reopens every
 decode-eligible WAV through the runner's same directory-descriptor policy.
@@ -296,22 +304,40 @@ CANDIDATE_REGISTRATION_COMMIT=replace-with-40-lowercase-git-commit
   --output-receipt eval/private/replay-001/score-receipt.json
 
 "${CUSTODIAN_ENV[@]}" .venv/bin/python -P -S \
-  scripts/replay_asr_evaluation.py validate-terminal \
+  scripts/replay_asr_evaluation.py finalize-terminal \
+  --input-projection eval/private/replay-001/sealed-input.json \
+  --candidate-lock eval/private/replay-001/candidate-lock.json \
   --input-receipt eval/private/replay-001/export-receipt.json \
-  --prediction-receipt eval/private/replay-001/prediction-receipt.json \
-  --score-receipt eval/private/replay-001/score-receipt.json \
-  --core eval/private/replay-001/core.json \
+  --raw-predictions eval/private/replay-001/raw-predictions.jsonl \
+  --predictions eval/private/replay-001/predictions.json \
   --execution-envelope eval/private/replay-001/execution-envelope.json \
+  --prediction-receipt eval/private/replay-001/prediction-receipt.json \
+  --core eval/private/replay-001/core.json \
+  --score-receipt eval/private/replay-001/score-receipt.json \
+  --decision investigate \
+  --output-terminal-manifest eval/private/replay-001/terminal-manifest.json
+
+"${CUSTODIAN_ENV[@]}" .venv/bin/python -P -S \
+  scripts/replay_asr_evaluation.py validate-terminal \
+  --input-projection eval/private/replay-001/sealed-input.json \
+  --candidate-lock eval/private/replay-001/candidate-lock.json \
+  --input-receipt eval/private/replay-001/export-receipt.json \
+  --raw-predictions eval/private/replay-001/raw-predictions.jsonl \
+  --predictions eval/private/replay-001/predictions.json \
+  --execution-envelope eval/private/replay-001/execution-envelope.json \
+  --prediction-receipt eval/private/replay-001/prediction-receipt.json \
+  --core eval/private/replay-001/core.json \
+  --score-receipt eval/private/replay-001/score-receipt.json \
   --terminal-manifest eval/private/replay-001/terminal-manifest.json
 ```
 
-The terminal manifest in that last command is the mode-`0600`, result-bearing
-private copy, not the tracked planned manifest. A successful validation emits
-nothing and does not rewrite any input; the exit status is its only terminal
-signal. Keep the manifest, core, envelope, and all three receipts together in
-the restricted mode-`0700` directory, together with the sealed input,
-candidate lock, raw predictions, and canonical prediction bundle. None of the
-intermediate artifacts may be discarded merely because a later receipt exists.
+The terminal manifest produced above is the mode-`0600`, result-bearing private
+copy, not the tracked planned manifest. Artifact paths inside it are filenames
+relative to that single mode-`0700` vault. Both successful finalization and
+validation emit nothing; validation does not rewrite any input, and exit status
+is the only terminal signal. Keep the manifest and all nine predecessor files
+together. None may be discarded merely because a later receipt exists; deleting
+or replacing even the raw JSONL makes terminal revalidation fail closed.
 
 The external contracts are reviewable in `candidate-lock.schema.json`,
 `execution-envelope.schema.json`, `prediction-bundle.schema.json`, and

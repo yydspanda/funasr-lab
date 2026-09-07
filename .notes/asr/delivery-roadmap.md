@@ -77,8 +77,10 @@ BOOT-01 -> BASE-01 -> EVAL-01 -> TRAIN-01 -> EXP-01 -> STREAM-01 -> SERVE-01
   before scoring reopens references.
 - A committed reference-free CPU runner verifies actual audio, model, config,
   command, environment, hardware, and source identities; its integer timing
-  and process-RSS envelope is rebound through prediction freeze, score receipt,
-  and terminal-manifest parity without changing deterministic core bytes.
+  and process-RSS envelope is rebound through prediction freeze and score
+  receipt. The sealed custodian then derives the private terminal manifest from
+  the complete nine-file vault and revalidates exact filenames and byte hashes
+  without changing deterministic core bytes.
 - Canonical restricted receipts complete each custodian receipt-bearing
   transition; the runner publishes raw predictions then its execution envelope,
   which the later prediction-freeze receipt authenticates. The score receipt

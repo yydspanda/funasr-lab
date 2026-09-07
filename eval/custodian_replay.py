@@ -209,6 +209,39 @@ TERMINAL_METRIC_FIELDS = frozenset(
     }
 )
 
+TERMINAL_DECISIONS = frozenset({"accept", "reject", "investigate"})
+TERMINAL_EVIDENCE_ROLES = (
+    "sealed_input",
+    "candidate_lock",
+    "input_export_receipt",
+    "raw_predictions",
+    "prediction_bundle",
+    "execution_envelope",
+    "prediction_freeze_receipt",
+    "restricted_core",
+    "score_receipt",
+)
+TERMINAL_ARTIFACT_ROLES = (
+    "sealed_input",
+    "candidate_lock",
+    "input_export_receipt",
+    "prediction_bundle",
+    "execution_envelope",
+    "prediction_freeze_receipt",
+    "restricted_core",
+    "score_receipt",
+)
+TERMINAL_ARTIFACT_KINDS = {
+    "sealed_input": "other",
+    "candidate_lock": "other",
+    "input_export_receipt": "other",
+    "prediction_bundle": "prediction",
+    "execution_envelope": "report",
+    "prediction_freeze_receipt": "other",
+    "restricted_core": "report",
+    "score_receipt": "other",
+}
+
 INPUT_EXPORT_RECEIPT_FIELDS = frozenset(
     {
         "schema_version",
@@ -2475,6 +2508,169 @@ def validate_prediction_freeze_receipt_handoff(
             )
 
 
+def terminal_metrics_from_evidence(
+    core_report: Mapping[str, Any],
+    execution_envelope: Mapping[str, Any],
+) -> dict[str, int | float | None]:
+    """Derive the complete sealed EVAL-01 metric set from owned evidence."""
+
+    try:
+        validate_core_report(core_report)
+    except CoreReportValidationError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+    try:
+        validate_execution_envelope(execution_envelope)
+    except ExecutionEnvelopeError as exc:
+        raise CustodianReplayError(str(exc)) from exc
+
+    cer = core_report["aggregate"]["cer"]
+    if cer["reference_units"] == 0:
+        raise CustodianReplayError(
+            "a terminal experiment manifest requires nonzero core CER reference units"
+        )
+    mer = core_report["aggregate"]["mer"]
+    counts = core_report["counts"]
+    measurement = execution_envelope["measurement"]
+    execution_counts = measurement["counts"]
+    return {
+        "content_cer": cer["errors"] / cer["reference_units"],
+        "substitutions": cer["substitutions"],
+        "deletions": cer["deletions"],
+        "insertions": cer["insertions"],
+        "reference_units": cer["reference_units"],
+        "utterance_count": counts["utterance_count"],
+        "failed_count": counts["failed_count"],
+        "excluded_count": counts["excluded_count"],
+        "mer": (
+            None
+            if mer["reference_units"] == 0
+            else mer["errors"] / mer["reference_units"]
+        ),
+        "rtf_p50": measurement["rtf_p50"],
+        "rtf_p95": measurement["rtf_p95"],
+        "peak_rss_mb": peak_rss_mib(measurement["peak_rss_bytes"]),
+        "rtf_attempted_count": execution_counts["total_attempt_count"],
+        "retried_count": execution_counts["retried_item_count"],
+        "model_load_seconds": measurement["model_load_ns"] / 1_000_000_000,
+        "cold_inference_seconds": (
+            measurement["cold_inference_ns"] / 1_000_000_000
+        ),
+        "cold_start_seconds": measurement["cold_start_ns"] / 1_000_000_000,
+        "warm_wall_seconds": measurement["measured_wall_ns"] / 1_000_000_000,
+        "warm_audio_seconds": measurement["measured_audio_seconds"],
+    }
+
+
+def terminal_artifacts_from_evidence(
+    artifact_evidence: Mapping[str, tuple[str, str]],
+) -> list[dict[str, str]]:
+    """Build the fixed, ordered terminal inventory from path/hash pairs."""
+
+    missing = sorted(set(TERMINAL_ARTIFACT_ROLES) - set(artifact_evidence))
+    unknown = sorted(set(artifact_evidence) - set(TERMINAL_ARTIFACT_ROLES))
+    if missing:
+        raise CustodianReplayError(
+            "terminal artifact evidence is missing role(s): " + ", ".join(missing)
+        )
+    if unknown:
+        raise CustodianReplayError(
+            "terminal artifact evidence has unknown role(s): " + ", ".join(unknown)
+        )
+
+    artifacts: list[dict[str, str]] = []
+    for role in TERMINAL_ARTIFACT_ROLES:
+        value = artifact_evidence[role]
+        if (
+            isinstance(value, (str, bytes, bytearray))
+            or not isinstance(value, Sequence)
+            or len(value) != 2
+        ):
+            raise TypeError(
+                f"terminal artifact evidence {role!r} must be one path/hash pair"
+            )
+        path, digest = value
+        unsafe_path_character = isinstance(path, str) and any(
+            ord(character) < 0x20
+            or ord(character) == 0x7F
+            or 0xD800 <= ord(character) <= 0xDFFF
+            for character in path
+        )
+        if (
+            not isinstance(path, str)
+            or not path
+            or path in {".", ".."}
+            or "/" in path
+            or "\\" in path
+            or unsafe_path_character
+            or Path(path).name != path
+        ):
+            raise CustodianReplayError(
+                f"terminal artifact {role!r} path must be one vault-relative filename"
+            )
+        if not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None:
+            raise CustodianReplayError(
+                f"terminal artifact {role!r} must have a canonical SHA-256"
+            )
+        artifacts.append(
+            {
+                "kind": TERMINAL_ARTIFACT_KINDS[role],
+                "path": path,
+                "sha256": digest,
+            }
+        )
+    if len({artifact["path"] for artifact in artifacts}) != len(artifacts):
+        raise CustodianReplayError("terminal artifact filenames must be distinct")
+    return artifacts
+
+
+def build_terminal_candidate_manifest(
+    planned_manifest: Mapping[str, Any],
+    *,
+    decision: str,
+    core_report: Mapping[str, Any],
+    execution_envelope: Mapping[str, Any],
+    artifact_evidence: Mapping[str, tuple[str, str]],
+) -> dict[str, Any]:
+    """Materialize a result copy without accepting operator-supplied metrics."""
+
+    violations = validate_manifest(
+        dict(planned_manifest),
+        "planned candidate manifest",
+    )
+    if violations:
+        raise CustodianReplayError(violations[0])
+    if planned_manifest.get("decision") != "planned":
+        raise CustodianReplayError("source candidate manifest must remain planned")
+    if not isinstance(decision, str) or decision not in TERMINAL_DECISIONS:
+        raise CustodianReplayError(
+            "terminal decision must be accept, reject, or investigate"
+        )
+    terminal = deepcopy(dict(planned_manifest))
+    terminal["metrics"] = terminal_metrics_from_evidence(
+        core_report,
+        execution_envelope,
+    )
+    terminal["artifacts"] = terminal_artifacts_from_evidence(artifact_evidence)
+    terminal["decision"] = decision
+    violations = validate_manifest(terminal, "terminal candidate manifest")
+    if violations:
+        raise CustodianReplayError(violations[0])
+    return terminal
+
+
+def validate_terminal_artifact_inventory(
+    manifest: Mapping[str, Any],
+    artifact_evidence: Mapping[str, tuple[str, str]],
+) -> None:
+    """Require terminal paths and hashes to equal the supplied vault files."""
+
+    expected = terminal_artifacts_from_evidence(artifact_evidence)
+    if manifest.get("artifacts") != expected:
+        raise CustodianReplayError(
+            "terminal artifact inventory does not match the supplied vault files"
+        )
+
+
 def validate_terminal_manifest_for_receipt(
     manifest: Mapping[str, Any],
     receipt: Mapping[str, Any],
@@ -3066,13 +3262,18 @@ __all__ = [
     "PREDICTION_BUNDLE_SCHEMA_VERSION",
     "PREDICTION_FREEZE_RECEIPT_KIND",
     "RECEIPT_SCHEMA_VERSION",
-    "SEALED_SPLIT",
     "SCORER_SOURCE_PATHS",
+    "SEALED_SPLIT",
+    "TERMINAL_ARTIFACT_KINDS",
+    "TERMINAL_ARTIFACT_ROLES",
+    "TERMINAL_DECISIONS",
+    "TERMINAL_EVIDENCE_ROLES",
     "CustodianReplayError",
     "LoadedArtifact",
     "LoadedPredictionItems",
     "build_candidate_lock",
     "build_prediction_bundle",
+    "build_terminal_candidate_manifest",
     "candidate_freeze_projection",
     "candidate_freeze_sha256",
     "candidate_manifest_freeze_sha256",
@@ -3082,30 +3283,33 @@ __all__ = [
     "load_candidate_lock",
     "load_custodian_receipt",
     "load_planned_candidate_manifest",
+    "load_prediction_bundle",
     "load_prediction_items_jsonl",
     "load_prediction_items_jsonl_artifact",
-    "load_prediction_bundle",
     "load_restricted_core_report",
     "load_sealed_input_projection",
     "load_terminal_candidate_manifest",
     "parse_sealed_input_projection",
     "preflight_replay_artifacts",
     "scorer_code_identity",
+    "terminal_artifacts_from_evidence",
+    "terminal_metrics_from_evidence",
     "validate_candidate_lock",
     "validate_candidate_request",
     "validate_custodian_receipt",
     "validate_decode_handoff",
     "validate_frozen_execution_handoff",
     "validate_input_export_receipt_handoff",
-    "validate_prediction_freeze_receipt_handoff",
+    "validate_output_paths",
     "validate_prediction_bundle",
+    "validate_prediction_freeze_receipt_handoff",
     "validate_prediction_handoff",
     "validate_raw_execution_handoff",
     "validate_registered_candidate_binding",
+    "validate_replay_collection",
     "validate_restricted_input_paths",
     "validate_restricted_transition_paths",
-    "validate_output_paths",
-    "validate_replay_collection",
+    "validate_terminal_artifact_inventory",
     "validate_terminal_manifest_for_receipt",
     "write_atomic_outputs",
 ]

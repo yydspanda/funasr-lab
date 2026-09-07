@@ -1,7 +1,7 @@
 # ASR Benchmark Protocol
 
 > Status: **Draft to freeze under `EVAL-01`**
-> Updated: `2026-08-28`
+> Updated: `2026-09-07`
 
 This protocol prevents data, normalization, decoding, and hardware changes from
 being mistaken for model improvements. Until `EVAL-01` passes, results are
@@ -253,8 +253,15 @@ accepted, rejected, or marked for investigation, the terminal verifier must
 preserve the same candidate facts, bind input/lock/prediction/envelope/core and
 receipts, match core CER/MER components and counts, and match envelope RTF
 P50/P95, all-attempt/retry counts, cold/warm timing, audio duration, and peak
-RSS. Performance is inconclusive without this complete envelope; stdout or
-manifest-only numbers are never evidence.
+RSS. The terminal manifest is materialized only by the sealed custodian: its 19
+metrics are derived from the core/envelope, its fixed artifact inventory is
+built from actual bytes in the single private vault, and only the non-public
+`accept`/`reject`/`investigate` decision is operator supplied. Finalization and
+later validation both reopen the raw JSONL plus all eight inventoried artifacts;
+the raw file is transitively hash-bound rather than listed directly because a
+valid all-missing run can produce an empty JSONL. Performance is inconclusive
+without this complete envelope; stdout or manifest-only numbers are never
+evidence.
 
 The offline custodian scorer emits only a restricted core report. A text-free
 aggregate projection is not automatically safe to publish: exact metrics over
@@ -287,8 +294,11 @@ has `public_release.state: withheld`: its tracked manifest remains unchanged at
 `planned`, while a restricted private terminal copy carries the terminal
 decision, measured metrics, and artifact hashes. That copy must pass the sealed
 terminal chain validator against the input-export, prediction-freeze, and score
-receipts, restricted core, and execution envelope; it is neither committed nor
-released until a separate release policy authorizes it.
+receipts, sealed input, candidate lock, raw and frozen predictions, restricted
+core, and execution envelope. Every file must remain a mode-`0600` regular file
+inside the same mode-`0700` vault, and each inventoried path is the exact
+vault-relative filename. The copy is neither committed nor released until a
+separate release policy authorizes it.
 
 Branch names, floating model revisions (`main`, `master`, `latest`, or `HEAD`),
 abbreviated commits, placeholder values, and zero/repeated/empty digests are not

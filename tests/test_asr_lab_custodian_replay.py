@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -23,12 +25,14 @@ from eval.custodian_replay import CANDIDATE_LOCK_KIND
 from eval.custodian_replay import CANDIDATE_LOCK_SCHEMA_VERSION
 from eval.custodian_replay import CUSTODIAN_SCORE_RECEIPT_KIND
 from eval.custodian_replay import INPUT_EXPORT_RECEIPT_KIND
+from eval.custodian_replay import PREDICTION_FREEZE_RECEIPT_KIND
 from eval.custodian_replay import RECEIPT_SCHEMA_VERSION
 from eval.custodian_replay import CustodianReplayError
 from eval.custodian_replay import LoadedArtifact
 from eval.custodian_replay import RegisteredCandidateManifest
 from eval.custodian_replay import SCORER_SOURCE_PATHS
 from eval.custodian_replay import build_prediction_bundle as _build_prediction_bundle
+from eval.custodian_replay import build_terminal_candidate_manifest
 from eval.custodian_replay import candidate_freeze_projection
 from eval.custodian_replay import candidate_freeze_sha256
 from eval.custodian_replay import candidate_manifest_freeze_sha256
@@ -47,6 +51,7 @@ from eval.custodian_replay import validate_candidate_request
 from eval.custodian_replay import validate_custodian_receipt
 from eval.custodian_replay import validate_input_export_receipt_handoff
 from eval.custodian_replay import validate_prediction_bundle
+from eval.custodian_replay import validate_terminal_artifact_inventory
 from eval.custodian_replay import validate_terminal_manifest_for_receipt
 from eval.custodian_replay import validate_restricted_transition_paths
 from eval.custodian_replay import write_atomic_outputs
@@ -337,6 +342,262 @@ class CustodianReplayArtifactTest(unittest.TestCase):
                 "summary_sha256": None,
                 "reason_code": "release_policy_not_implemented",
             },
+        }
+
+    def complete_terminal_chain(self, *, empty_raw: bool = False):
+        planned = self.planned_manifest()
+        registered = registered_candidate(planned)
+        registration = {
+            "candidate_registration_commit": registered.registration_commit,
+            "candidate_manifest_path": registered.repository_path,
+            "candidate_manifest_sha256": registered.sha256,
+        }
+
+        projection_document = copy.deepcopy(self.projection().document)
+        projection_document["item_count"] = 1
+        projection_document["items"] = projection_document["items"][:1]
+        projection = parse_sealed_input_projection(
+            canonical_json_bytes(projection_document)
+        )
+        record = {
+            "id": "sealed-1",
+            "raw_text": "第一条",
+            "split": "sealed-blind",
+            "scenario_tags": ["language:zh", "environment:meeting"],
+            "evaluation_status": "included",
+            "exclusion_reason": None,
+        }
+        records = (record,)
+        collection = ValidatedCollection(
+            summary={
+                "data_sha256": planned["data_sha256"],
+                "record_identity_version": RECORD_IDENTITY_VERSION,
+                "record_input_sha256": record_input_sha256(records),
+            },
+            records=records,
+            _sealed_input_projection=projection.payload,
+        )
+        prediction_items = (
+            []
+            if empty_raw
+            else [
+                {
+                    "id": "sealed-1",
+                    "raw_text": "第一条",
+                    "status": "ok",
+                    "reason_code": None,
+                }
+            ]
+        )
+        core = build_split_core_report(
+            collection,
+            prediction_items,
+            split="sealed-blind",
+        )
+
+        candidate = candidate_freeze_projection(planned)
+        candidate_lock = {
+            "schema_version": CANDIDATE_LOCK_SCHEMA_VERSION,
+            "kind": CANDIDATE_LOCK_KIND,
+            "state": "frozen",
+            "access_class": "restricted",
+            "dataset_id": projection.document["dataset_id"],
+            "revision": projection.document["revision"],
+            "split": "sealed-blind",
+            "data_sha256": planned["data_sha256"],
+            "input_projection_sha256": projection.sha256,
+            "hypothesis_adapter_version": "identity-v1",
+            "record_identity_version": RECORD_IDENTITY_VERSION,
+            "record_input_sha256": core["provenance"]["record_input_sha256"],
+            "decode_item_count": 1,
+            "decode_item_ids_sha256": sha256_bytes(
+                canonical_json_bytes(["sealed-1"])
+            ),
+            "source_manifest_decision": "planned",
+            **registration,
+            "candidate": candidate,
+            "candidate_freeze_sha256": candidate_freeze_sha256(candidate),
+        }
+        candidate_lock_payload = canonical_candidate_lock_bytes(candidate_lock)
+        candidate_lock_sha256 = sha256_bytes(candidate_lock_payload)
+        input_receipt = {
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "kind": INPUT_EXPORT_RECEIPT_KIND,
+            "state": "complete",
+            "access_class": "restricted",
+            "experiment_id": planned["experiment_id"],
+            "dataset_id": projection.document["dataset_id"],
+            "revision": projection.document["revision"],
+            "split": "sealed-blind",
+            "decode_item_count": 1,
+            "input_projection_sha256": projection.sha256,
+            "candidate_lock_sha256": candidate_lock_sha256,
+            "candidate_freeze_sha256": candidate_lock[
+                "candidate_freeze_sha256"
+            ],
+            **registration,
+        }
+        input_receipt_payload = canonical_custodian_receipt_bytes(input_receipt)
+        input_receipt_sha256 = sha256_bytes(input_receipt_payload)
+        raw_payload = b"".join(
+            canonical_json_bytes(item) for item in prediction_items
+        )
+        raw_sha256 = sha256_bytes(raw_payload)
+
+        status = "failed" if empty_raw else "ok"
+        reason_code = "missing_prediction" if empty_raw else None
+        attempt = {
+            "id": "sealed-1",
+            "attempt_index": 0,
+            "elapsed_ns": 100_000_000,
+            "audio_duration_seconds": 1.0,
+            "status": status,
+            "reason_code": reason_code,
+        }
+        observation = {
+            "experiment_id": planned["experiment_id"],
+            "dataset_id": projection.document["dataset_id"],
+            "revision": projection.document["revision"],
+            "split": "sealed-blind",
+            "candidate_freeze_sha256": candidate_lock[
+                "candidate_freeze_sha256"
+            ],
+            "candidate_lock_sha256": candidate_lock_sha256,
+            "input_projection_sha256": projection.sha256,
+            "hypothesis_adapter_version": "identity-v1",
+            "config_sha256": planned["config_sha256"],
+            "models": planned["models"],
+            "command": planned["command"],
+            "hardware": planned["hardware"],
+            "runner_code_commit": planned["code_commit"],
+            "runner_source_sha256": digest("runner-source-inventory"),
+            "runtime": {
+                "python_implementation": "cpython",
+                "python_version": "3.11.15",
+                "python_cache_tag": "cpython-311",
+                "dependency_lock_sha256": digest("lab-cpu-lock"),
+                "installed_dependencies_sha256": digest(
+                    "installed-dependencies"
+                ),
+                "installed_dependency_count": 71,
+                "unicode_version": "14.0.0",
+            },
+            "raw_predictions_sha256": raw_sha256,
+            "prediction_items_sha256": sha256_bytes(
+                canonical_json_bytes(prediction_items)
+            ),
+            "prediction_item_count": len(prediction_items),
+            "started_at_utc": "2026-08-28T00:00:00Z",
+            "finished_at_utc": "2026-08-28T00:00:01Z",
+            "measurement_contract": {
+                "clock_version": "python-perf-counter-ns-v1",
+                "rss_version": "linux-rusage-self-maxrss-kib-v1",
+                "rss_scope": "fresh-process-rusage-self",
+                "rtf_population": "all-measured-attempts",
+                "warmup_runs": 1,
+            },
+            "model_load_ns": 200_000_000,
+            "cold_attempt": {
+                **attempt,
+                "elapsed_ns": 50_000_000,
+            },
+            "warmup_attempts": [
+                {
+                    **attempt,
+                    "elapsed_ns": 75_000_000,
+                }
+            ],
+            "decode_attempts": [attempt],
+            "peak_rss_bytes": 1_048_576,
+        }
+        execution_envelope = build_execution_envelope(
+            observation,
+            prediction_items,
+            input_export_receipt_sha256=input_receipt_sha256,
+        )
+        execution_payload = canonical_execution_envelope_bytes(
+            execution_envelope
+        )
+        execution_sha256 = sha256_bytes(execution_payload)
+        prediction_bundle = _build_prediction_bundle(
+            projection,
+            candidate_lock_sha256,
+            prediction_items,
+            input_export_receipt_sha256=input_receipt_sha256,
+            raw_predictions_sha256=raw_sha256,
+            execution_envelope_sha256=execution_sha256,
+            hypothesis_adapter_version="identity-v1",
+        )
+        prediction_payload = canonical_prediction_bundle_bytes(
+            prediction_bundle
+        )
+        prediction_sha256 = sha256_bytes(prediction_payload)
+        prediction_receipt = {
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "kind": PREDICTION_FREEZE_RECEIPT_KIND,
+            "state": "complete",
+            "access_class": "restricted",
+            "experiment_id": planned["experiment_id"],
+            "dataset_id": projection.document["dataset_id"],
+            "revision": projection.document["revision"],
+            "split": "sealed-blind",
+            "expected_decode_item_count": 1,
+            "prediction_item_count": len(prediction_items),
+            "missing_prediction_count": 1 - len(prediction_items),
+            "input_projection_sha256": projection.sha256,
+            "candidate_lock_sha256": candidate_lock_sha256,
+            "candidate_freeze_sha256": candidate_lock[
+                "candidate_freeze_sha256"
+            ],
+            **registration,
+            "hypothesis_adapter_version": "identity-v1",
+            "prediction_artifact_sha256": prediction_sha256,
+            "prediction_items_sha256": prediction_bundle["items_sha256"],
+            "input_export_receipt_sha256": input_receipt_sha256,
+            "raw_predictions_sha256": raw_sha256,
+            "execution_envelope_sha256": execution_sha256,
+            "runner_code_commit": planned["code_commit"],
+            "runner_source_sha256": observation["runner_source_sha256"],
+        }
+        prediction_receipt_payload = canonical_custodian_receipt_bytes(
+            prediction_receipt
+        )
+        prediction_receipt_sha256 = sha256_bytes(prediction_receipt_payload)
+        score_receipt = self.score_receipt(core)
+        score_receipt.update(
+            {
+                "input_projection_sha256": projection.sha256,
+                "candidate_lock_sha256": candidate_lock_sha256,
+                "candidate_freeze_sha256": candidate_lock[
+                    "candidate_freeze_sha256"
+                ],
+                **registration,
+                "prediction_artifact_sha256": prediction_sha256,
+                "prediction_items_sha256": prediction_bundle["items_sha256"],
+                "input_export_receipt_sha256": input_receipt_sha256,
+                "prediction_freeze_receipt_sha256": prediction_receipt_sha256,
+                "execution_envelope_sha256": execution_sha256,
+                "runner_code_commit": planned["code_commit"],
+                "runner_source_sha256": observation["runner_source_sha256"],
+            }
+        )
+        score_receipt_payload = canonical_custodian_receipt_bytes(score_receipt)
+        payloads = {
+            "input_projection": projection.payload,
+            "candidate_lock": candidate_lock_payload,
+            "input_receipt": input_receipt_payload,
+            "raw_predictions": raw_payload,
+            "predictions": prediction_payload,
+            "execution_envelope": execution_payload,
+            "prediction_receipt": prediction_receipt_payload,
+            "core": canonical_core_bytes(core),
+            "score_receipt": score_receipt_payload,
+        }
+        return {
+            "planned": planned,
+            "registered": registered,
+            "score_receipt": score_receipt,
+            "payloads": payloads,
         }
 
     def test_prediction_bundle_binds_ordered_id_subsequence_adapter_and_items_hash(self):
@@ -1223,6 +1484,317 @@ class CustodianReplayArtifactTest(unittest.TestCase):
             ):
                 replay_cli._validated_runner_source_identity(candidate, envelope)
 
+    def test_terminal_cli_parser_requires_complete_evidence_and_explicit_decision(
+        self,
+    ):
+        parser = replay_cli.build_parser()
+        evidence_arguments = [
+            "--input-projection",
+            "sealed-input.json",
+            "--candidate-lock",
+            "candidate-lock.json",
+            "--input-receipt",
+            "input-receipt.json",
+            "--raw-predictions",
+            "raw-predictions.jsonl",
+            "--predictions",
+            "predictions.json",
+            "--execution-envelope",
+            "execution-envelope.json",
+            "--prediction-receipt",
+            "prediction-receipt.json",
+            "--core",
+            "core.json",
+            "--score-receipt",
+            "score-receipt.json",
+        ]
+        finalize_arguments = [
+            "finalize-terminal",
+            *evidence_arguments,
+            "--decision",
+            "investigate",
+            "--output-terminal-manifest",
+            "terminal.json",
+        ]
+        finalize = parser.parse_args(finalize_arguments)
+        self.assertEqual(finalize.command, "finalize-terminal")
+        self.assertEqual(finalize.decision, "investigate")
+        self.assertFalse(hasattr(finalize, "audio_root"))
+        required_options = evidence_arguments[::2] + [
+            "--decision",
+            "--output-terminal-manifest",
+        ]
+        for option in required_options:
+            with self.subTest(missing=option):
+                incomplete = list(finalize_arguments)
+                index = incomplete.index(option)
+                del incomplete[index : index + 2]
+                with (
+                    contextlib.redirect_stderr(io.StringIO()),
+                    self.assertRaisesRegex(SystemExit, "2"),
+                ):
+                    parser.parse_args(incomplete)
+        invalid_decision = list(finalize_arguments)
+        invalid_decision[invalid_decision.index("--decision") + 1] = "planned"
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaisesRegex(SystemExit, "2"),
+        ):
+            parser.parse_args(invalid_decision)
+
+        validate = parser.parse_args(
+            [
+                "validate-terminal",
+                *evidence_arguments,
+                "--terminal-manifest",
+                "terminal.json",
+            ]
+        )
+        self.assertEqual(validate.command, "validate-terminal")
+        self.assertFalse(hasattr(validate, "decision"))
+        self.assertFalse(hasattr(validate, "audio_root"))
+
+        score = parser.parse_args(
+            [
+                "score",
+                "--descriptor",
+                "collection.json",
+                "--audio-root",
+                "audio",
+                "--input-projection",
+                "sealed-input.json",
+                "--candidate-lock",
+                "candidate-lock.json",
+                "--input-receipt",
+                "input-receipt.json",
+                "--predictions",
+                "predictions.json",
+                "--execution-envelope",
+                "execution-envelope.json",
+                "--prediction-receipt",
+                "prediction-receipt.json",
+                "--output-core",
+                "core.json",
+                "--output-receipt",
+                "score-receipt.json",
+            ]
+        )
+        self.assertEqual(score.audio_root, Path("audio"))
+
+    def test_terminal_evidence_loader_replays_registration_and_both_handoffs(self):
+        paths = {
+            role: Path(f"{role}.fixture")
+            for role in replay_cli.TERMINAL_EVIDENCE_ROLES
+        }
+        sealed_input = mock.Mock(name="sealed_input")
+        candidate_lock = mock.Mock(name="candidate_lock")
+        candidate_lock.document = {"evidence": "lock"}
+        input_receipt = mock.Mock(name="input_receipt")
+        raw_predictions = mock.Mock(name="raw_predictions")
+        predictions = mock.Mock(name="predictions")
+        execution_envelope = mock.Mock(name="execution_envelope")
+        prediction_receipt = mock.Mock(name="prediction_receipt")
+        core_report = {"core": "report"}
+        score_receipt = mock.Mock(name="score_receipt")
+        score_receipt.document = {"evidence": "score"}
+        planned = registered_candidate(self.planned_manifest())
+
+        with (
+            mock.patch.object(
+                replay_cli,
+                "load_sealed_input_projection",
+                return_value=sealed_input,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_candidate_lock",
+                return_value=candidate_lock,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_custodian_receipt",
+                side_effect=[input_receipt, prediction_receipt, score_receipt],
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_prediction_items_jsonl_artifact",
+                return_value=raw_predictions,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_prediction_bundle",
+                return_value=predictions,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_execution_envelope",
+                return_value=execution_envelope,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "load_restricted_core_report",
+                return_value=core_report,
+            ),
+            mock.patch.object(
+                replay_cli,
+                "validate_registered_candidate_binding",
+                side_effect=[planned, planned],
+            ) as registration_validator,
+            mock.patch.object(
+                replay_cli,
+                "validate_raw_execution_handoff",
+            ) as raw_validator,
+            mock.patch.object(
+                replay_cli,
+                "validate_prediction_freeze_receipt_handoff",
+            ) as freeze_validator,
+        ):
+            loaded = replay_cli._load_terminal_evidence(paths)
+
+        self.assertIs(loaded["registered_candidate"], planned)
+        self.assertEqual(
+            registration_validator.call_args_list,
+            [
+                mock.call(candidate_lock.document),
+                mock.call(score_receipt.document),
+            ],
+        )
+        raw_validator.assert_called_once_with(
+            sealed_input,
+            candidate_lock,
+            input_receipt,
+            raw_predictions,
+            execution_envelope,
+        )
+        freeze_validator.assert_called_once_with(
+            sealed_input,
+            candidate_lock,
+            input_receipt,
+            predictions,
+            execution_envelope,
+            prediction_receipt,
+        )
+
+    def test_terminal_commands_reopen_one_real_complete_vault(self):
+        for empty_raw in (False, True):
+            with (
+                self.subTest(empty_raw=empty_raw),
+                tempfile.TemporaryDirectory() as temporary_directory,
+            ):
+                chain = self.complete_terminal_chain(empty_raw=empty_raw)
+                vault = Path(temporary_directory)
+                vault.chmod(0o700)
+                filenames = {
+                    "input_projection": "01-input.bin",
+                    "candidate_lock": "02-lock.bin",
+                    "input_receipt": "03-export.bin",
+                    "raw_predictions": "04-raw.jsonl",
+                    "predictions": "05-predictions.bin",
+                    "execution_envelope": "06-envelope.bin",
+                    "prediction_receipt": "07-freeze.bin",
+                    "core": "08-core.bin",
+                    "score_receipt": "09-score.bin",
+                }
+                paths = {
+                    role: vault / filename
+                    for role, filename in filenames.items()
+                }
+                for role, path in paths.items():
+                    path.write_bytes(chain["payloads"][role])
+                    path.chmod(0o600)
+                terminal_path = vault / "10-terminal.json"
+                finalize_args = argparse.Namespace(
+                    **paths,
+                    output_terminal_manifest=terminal_path,
+                    decision="investigate",
+                )
+                validate_args = argparse.Namespace(
+                    **paths,
+                    terminal_manifest=terminal_path,
+                )
+                score_receipt = chain["score_receipt"]
+                scorer_identity = (
+                    score_receipt["scorer_code_commit"],
+                    score_receipt["scorer_source_sha256"],
+                )
+                runner_identity = (
+                    score_receipt["runner_code_commit"],
+                    score_receipt["runner_source_sha256"],
+                )
+                with (
+                    mock.patch.object(
+                        replay_cli,
+                        "validate_registered_candidate_binding",
+                        return_value=chain["registered"],
+                    ),
+                    mock.patch.object(
+                        replay_cli,
+                        "_scorer_runtime_identity",
+                        return_value=copy.deepcopy(ACTUAL_SCORER_RUNTIME),
+                    ),
+                    mock.patch.object(
+                        replay_cli,
+                        "scorer_code_identity",
+                        return_value=scorer_identity,
+                    ),
+                    mock.patch.object(
+                        replay_cli,
+                        "runner_source_identity",
+                        return_value=runner_identity,
+                    ),
+                ):
+                    replay_cli._finalize_terminal(
+                        finalize_args,
+                        startup_scorer_runtime=copy.deepcopy(
+                            ACTUAL_SCORER_RUNTIME
+                        ),
+                        startup_scorer_identity=scorer_identity,
+                    )
+                    replay_cli._validate_terminal(
+                        validate_args,
+                        startup_scorer_runtime=copy.deepcopy(
+                            ACTUAL_SCORER_RUNTIME
+                        ),
+                        startup_scorer_identity=scorer_identity,
+                    )
+                    terminal = (
+                        custodian_replay_module.load_terminal_candidate_manifest(
+                            terminal_path
+                        )
+                    )
+                    self.assertEqual(terminal["decision"], "investigate")
+                    self.assertEqual(len(terminal["metrics"]), 19)
+                    self.assertEqual(len(terminal["artifacts"]), 8)
+                    self.assertEqual(
+                        [artifact["path"] for artifact in terminal["artifacts"]],
+                        [
+                            filenames["input_projection"],
+                            filenames["candidate_lock"],
+                            filenames["input_receipt"],
+                            filenames["predictions"],
+                            filenames["execution_envelope"],
+                            filenames["prediction_receipt"],
+                            filenames["core"],
+                            filenames["score_receipt"],
+                        ],
+                    )
+                    if empty_raw:
+                        self.assertEqual(
+                            terminal["metrics"]["failed_count"],
+                            1,
+                        )
+                    paths["raw_predictions"].write_bytes(
+                        paths["raw_predictions"].read_bytes() + b"\n"
+                    )
+                    with self.assertRaises(CustodianReplayError):
+                        replay_cli._validate_terminal(
+                            validate_args,
+                            startup_scorer_runtime=copy.deepcopy(
+                                ACTUAL_SCORER_RUNTIME
+                            ),
+                            startup_scorer_identity=scorer_identity,
+                        )
+
     def assert_terminal_cli_rejects_unregistered_fixture(
         self,
         terminal,
@@ -1234,17 +1806,61 @@ class CustodianReplayArtifactTest(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
+            root.chmod(0o700)
             paths = {
                 "terminal": root / "terminal.json",
+                "input_projection": root / "sealed-input.json",
+                "candidate_lock": root / "candidate-lock.json",
                 "input": root / "input-receipt.json",
+                "raw_predictions": root / "raw-predictions.jsonl",
+                "predictions": root / "predictions.json",
                 "prediction": root / "prediction-receipt.json",
                 "score": root / "score-receipt.json",
                 "core": root / "core.json",
                 "execution": root / "execution-envelope.json",
             }
+            projection = self.projection()
+            planned = copy.deepcopy(terminal)
+            planned.update({"decision": "planned", "metrics": None, "artifacts": []})
+            candidate = candidate_freeze_projection(planned)
+            candidate_lock = {
+                "schema_version": CANDIDATE_LOCK_SCHEMA_VERSION,
+                "kind": CANDIDATE_LOCK_KIND,
+                "state": "frozen",
+                "access_class": "restricted",
+                "dataset_id": projection.document["dataset_id"],
+                "revision": projection.document["revision"],
+                "split": "sealed-blind",
+                "data_sha256": candidate["data_sha256"],
+                "input_projection_sha256": projection.sha256,
+                "hypothesis_adapter_version": "identity-v1",
+                "record_identity_version": RECORD_IDENTITY_VERSION,
+                "record_input_sha256": receipt["record_input_sha256"],
+                "decode_item_count": 2,
+                "decode_item_ids_sha256": sha256_bytes(
+                    canonical_json_bytes(["sealed-1", "sealed-2"])
+                ),
+                "source_manifest_decision": "planned",
+                **registration_fields(candidate["experiment_id"]),
+                "candidate": candidate,
+                "candidate_freeze_sha256": candidate_freeze_sha256(candidate),
+            }
+            candidate_lock_payload = canonical_candidate_lock_bytes(candidate_lock)
+            prediction_bundle = build_prediction_bundle(
+                projection,
+                sha256_bytes(candidate_lock_payload),
+                [],
+                hypothesis_adapter_version="identity-v1",
+            )
             paths["terminal"].write_bytes(canonical_json_bytes(terminal))
+            paths["input_projection"].write_bytes(projection.payload)
+            paths["candidate_lock"].write_bytes(candidate_lock_payload)
             paths["input"].write_bytes(
                 canonical_custodian_receipt_bytes(input_export_receipt)
+            )
+            paths["raw_predictions"].write_bytes(b"")
+            paths["predictions"].write_bytes(
+                canonical_prediction_bundle_bytes(prediction_bundle)
             )
             paths["prediction"].write_bytes(
                 canonical_custodian_receipt_bytes(prediction_freeze_receipt)
@@ -1272,8 +1888,16 @@ class CustodianReplayArtifactTest(unittest.TestCase):
                     "-S",
                     "scripts/replay_asr_evaluation.py",
                     "validate-terminal",
+                    "--input-projection",
+                    str(paths["input_projection"]),
+                    "--candidate-lock",
+                    str(paths["candidate_lock"]),
                     "--input-receipt",
                     str(paths["input"]),
+                    "--raw-predictions",
+                    str(paths["raw_predictions"]),
+                    "--predictions",
+                    str(paths["predictions"]),
                     "--prediction-receipt",
                     str(paths["prediction"]),
                     "--score-receipt",
@@ -1296,7 +1920,48 @@ class CustodianReplayArtifactTest(unittest.TestCase):
             # false success.
             self.assertEqual(completed.returncode, 2)
             self.assertEqual(completed.stdout, b"")
-            self.assertTrue(completed.stderr)
+            self.assertIn(b"candidate manifest", completed.stderr)
+
+            finalizer_output = root / "generated-terminal.json"
+            finalized = subprocess.run(
+                [
+                    str(VENV_PYTHON),
+                    "-P",
+                    "-S",
+                    "scripts/replay_asr_evaluation.py",
+                    "finalize-terminal",
+                    "--input-projection",
+                    str(paths["input_projection"]),
+                    "--candidate-lock",
+                    str(paths["candidate_lock"]),
+                    "--input-receipt",
+                    str(paths["input"]),
+                    "--raw-predictions",
+                    str(paths["raw_predictions"]),
+                    "--predictions",
+                    str(paths["predictions"]),
+                    "--execution-envelope",
+                    str(paths["execution"]),
+                    "--prediction-receipt",
+                    str(paths["prediction"]),
+                    "--core",
+                    str(paths["core"]),
+                    "--score-receipt",
+                    str(paths["score"]),
+                    "--decision",
+                    "investigate",
+                    "--output-terminal-manifest",
+                    str(finalizer_output),
+                ],
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(finalized.returncode, 2)
+            self.assertEqual(finalized.stdout, b"")
+            self.assertIn(b"candidate manifest", finalized.stderr)
+            self.assertFalse(finalizer_output.exists())
 
             paths["terminal"].write_text(
                 json.dumps(terminal, ensure_ascii=False, indent=2) + "\n",
@@ -1544,50 +2209,65 @@ class CustodianReplayArtifactTest(unittest.TestCase):
         receipt["prediction_freeze_receipt_sha256"] = sha256_bytes(
             canonical_custodian_receipt_bytes(prediction_freeze_receipt)
         )
-        terminal["artifacts"] = [
-            {
-                "kind": "other",
-                "path": "eval/private/sealed-input.json",
-                "sha256": receipt["input_projection_sha256"],
-            },
-            {
-                "kind": "other",
-                "path": "eval/private/candidate-lock.json",
-                "sha256": receipt["candidate_lock_sha256"],
-            },
-            {
-                "kind": "other",
-                "path": "eval/private/input-export-receipt.json",
-                "sha256": input_export_receipt_sha256,
-            },
-            {
-                "kind": "prediction",
-                "path": "eval/private/predictions.json",
-                "sha256": receipt["prediction_artifact_sha256"],
-            },
-            {
-                "kind": "report",
-                "path": "eval/private/execution-envelope.json",
-                "sha256": receipt["execution_envelope_sha256"],
-            },
-            {
-                "kind": "other",
-                "path": "eval/private/prediction-receipt.json",
-                "sha256": receipt["prediction_freeze_receipt_sha256"],
-            },
-            {
-                "kind": "report",
-                "path": "eval/private/terminal-report.json",
-                "sha256": receipt["core_sha256"],
-            },
-            {
-                "kind": "other",
-                "path": "eval/private/score-receipt.json",
-                "sha256": sha256_bytes(
-                    canonical_custodian_receipt_bytes(receipt)
-                ),
-            },
-        ]
+        artifact_evidence = {
+            "sealed_input": (
+                "sealed-input.json",
+                receipt["input_projection_sha256"],
+            ),
+            "candidate_lock": (
+                "candidate-lock.json",
+                receipt["candidate_lock_sha256"],
+            ),
+            "input_export_receipt": (
+                "input-export-receipt.json",
+                input_export_receipt_sha256,
+            ),
+            "prediction_bundle": (
+                "predictions.json",
+                receipt["prediction_artifact_sha256"],
+            ),
+            "execution_envelope": (
+                "execution-envelope.json",
+                receipt["execution_envelope_sha256"],
+            ),
+            "prediction_freeze_receipt": (
+                "prediction-receipt.json",
+                receipt["prediction_freeze_receipt_sha256"],
+            ),
+            "restricted_core": (
+                "core.json",
+                receipt["core_sha256"],
+            ),
+            "score_receipt": (
+                "score-receipt.json",
+                sha256_bytes(canonical_custodian_receipt_bytes(receipt)),
+            ),
+        }
+        expected_metrics = copy.deepcopy(terminal["metrics"])
+        planned_terminal = copy.deepcopy(terminal)
+        planned_terminal.update(
+            {"decision": "planned", "metrics": None, "artifacts": []}
+        )
+        terminal = build_terminal_candidate_manifest(
+            planned_terminal,
+            decision="accept",
+            core_report=core,
+            execution_envelope=execution_envelope,
+            artifact_evidence=artifact_evidence,
+        )
+        self.assertEqual(terminal["metrics"], expected_metrics)
+        self.assertEqual(
+            set(terminal["metrics"]),
+            custodian_replay_module.TERMINAL_METRIC_FIELDS,
+        )
+        self.assertEqual(len(terminal["artifacts"]), 8)
+        self.assertNotIn(
+            "raw-predictions.jsonl",
+            {artifact["path"] for artifact in terminal["artifacts"]},
+        )
+        self.assertIsNone(planned_terminal["metrics"])
+        self.assertEqual(planned_terminal["artifacts"], [])
+        validate_terminal_artifact_inventory(terminal, artifact_evidence)
         validate_terminal_manifest_for_receipt(
             terminal,
             receipt,
@@ -1597,6 +2277,79 @@ class CustodianReplayArtifactTest(unittest.TestCase):
             prediction_freeze_receipt,
         )
 
+        canonical_terminal = canonical_json_bytes(terminal)
+        repeated = build_terminal_candidate_manifest(
+            planned_terminal,
+            decision="accept",
+            core_report=core,
+            execution_envelope=execution_envelope,
+            artifact_evidence=artifact_evidence,
+        )
+        self.assertEqual(canonical_json_bytes(repeated), canonical_terminal)
+        for decision in ("reject", "investigate"):
+            changed_decision = build_terminal_candidate_manifest(
+                planned_terminal,
+                decision=decision,
+                core_report=core,
+                execution_envelope=execution_envelope,
+                artifact_evidence=artifact_evidence,
+            )
+            expected = copy.deepcopy(terminal)
+            expected["decision"] = decision
+            self.assertEqual(changed_decision, expected)
+        for decision in ("planned", "unknown"):
+            with self.subTest(decision=decision), self.assertRaisesRegex(
+                CustodianReplayError,
+                "terminal decision",
+            ):
+                build_terminal_candidate_manifest(
+                    planned_terminal,
+                    decision=decision,
+                    core_report=core,
+                    execution_envelope=execution_envelope,
+                    artifact_evidence=artifact_evidence,
+                )
+        for unsafe_name in (
+            ".",
+            "..",
+            "nested/core.json",
+            "nested\\core.json",
+            "bad\x7f.json",
+        ):
+            with self.subTest(unsafe_name=unsafe_name):
+                unsafe_evidence = copy.deepcopy(artifact_evidence)
+                unsafe_evidence["restricted_core"] = (
+                    unsafe_name,
+                    receipt["core_sha256"],
+                )
+                with self.assertRaisesRegex(
+                    CustodianReplayError, "vault-relative filename"
+                ):
+                    build_terminal_candidate_manifest(
+                        planned_terminal,
+                        decision="accept",
+                        core_report=core,
+                        execution_envelope=execution_envelope,
+                        artifact_evidence=unsafe_evidence,
+                    )
+        missing_artifact = copy.deepcopy(artifact_evidence)
+        del missing_artifact["candidate_lock"]
+        with self.assertRaisesRegex(CustodianReplayError, "missing role"):
+            build_terminal_candidate_manifest(
+                planned_terminal,
+                decision="accept",
+                core_report=core,
+                execution_envelope=execution_envelope,
+                artifact_evidence=missing_artifact,
+            )
+        changed_inventory = copy.deepcopy(artifact_evidence)
+        changed_inventory["restricted_core"] = (
+            "renamed-core.json",
+            receipt["core_sha256"],
+        )
+        with self.assertRaisesRegex(CustodianReplayError, "inventory"):
+            validate_terminal_artifact_inventory(terminal, changed_inventory)
+
         self.assert_terminal_cli_rejects_unregistered_fixture(
             terminal,
             input_export_receipt,
@@ -1605,6 +2358,139 @@ class CustodianReplayArtifactTest(unittest.TestCase):
             core,
             execution_envelope,
         )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            vault = Path(temporary_directory)
+            vault.chmod(0o700)
+            finalizer_paths = {
+                "input_projection": vault / "01-audio-projection.bin",
+                "candidate_lock": vault / "02-candidate-lock.bin",
+                "input_receipt": vault / "03-export-receipt.bin",
+                "raw_predictions": vault / "04-decoder-raw.jsonl",
+                "predictions": vault / "05-frozen-prediction.bin",
+                "execution_envelope": vault / "06-runner-envelope.bin",
+                "prediction_receipt": vault / "07-freeze-receipt.bin",
+                "core": vault / "08-restricted-core.bin",
+                "score_receipt": vault / "09-score-receipt.bin",
+            }
+            for index, path in enumerate(finalizer_paths.values()):
+                path.write_bytes(f"fixture-{index}".encode("ascii"))
+                path.chmod(0o600)
+            output_terminal = vault / "terminal-manifest.json"
+            finalizer_args = argparse.Namespace(
+                **finalizer_paths,
+                output_terminal_manifest=output_terminal,
+                decision="accept",
+            )
+            finalizer_artifact_evidence = {
+                role: (
+                    replay_cli._terminal_evidence_paths(finalizer_args)[role].name,
+                    artifact_evidence[role][1],
+                )
+                for role in artifact_evidence
+            }
+            expected_finalized = build_terminal_candidate_manifest(
+                planned_terminal,
+                decision="accept",
+                core_report=core,
+                execution_envelope=execution_envelope,
+                artifact_evidence=finalizer_artifact_evidence,
+            )
+            finalizer_evidence = {
+                "sealed_input": mock.Mock(
+                    sha256=receipt["input_projection_sha256"]
+                ),
+                "candidate_lock": mock.Mock(
+                    sha256=receipt["candidate_lock_sha256"]
+                ),
+                "input_export_receipt": LoadedArtifact(
+                    input_export_receipt,
+                    canonical_custodian_receipt_bytes(input_export_receipt),
+                    input_export_receipt_sha256,
+                ),
+                "raw_predictions": mock.Mock(
+                    sha256=raw_predictions_sha256
+                ),
+                "prediction_bundle": mock.Mock(
+                    sha256=receipt["prediction_artifact_sha256"]
+                ),
+                "execution_envelope": mock.Mock(
+                    document=execution_envelope,
+                    sha256=receipt["execution_envelope_sha256"],
+                ),
+                "prediction_freeze_receipt": LoadedArtifact(
+                    prediction_freeze_receipt,
+                    canonical_custodian_receipt_bytes(prediction_freeze_receipt),
+                    receipt["prediction_freeze_receipt_sha256"],
+                ),
+                "restricted_core": core,
+                "score_receipt": LoadedArtifact(
+                    receipt,
+                    canonical_custodian_receipt_bytes(receipt),
+                    sha256_bytes(canonical_custodian_receipt_bytes(receipt)),
+                ),
+                "registered_candidate": registered_candidate(planned_terminal),
+            }
+            with (
+                mock.patch.object(
+                    replay_cli,
+                    "_load_terminal_evidence",
+                    return_value=finalizer_evidence,
+                ),
+                mock.patch.object(
+                    replay_cli,
+                    "_validate_terminal_runtime_and_sources",
+                    return_value=(("a", "b"), ("c", "d"), {}),
+                ),
+                mock.patch.object(
+                    replay_cli,
+                    "_revalidate_terminal_runtime_and_sources",
+                ),
+            ):
+                replay_cli._finalize_terminal(finalizer_args)
+                self.assertEqual(
+                    output_terminal.read_bytes(),
+                    canonical_json_bytes(expected_finalized),
+                )
+                self.assertNotEqual(output_terminal.read_bytes(), canonical_terminal)
+                self.assertEqual(output_terminal.stat().st_mode & 0o777, 0o600)
+                with self.assertRaisesRegex(
+                    CustodianReplayError, "refusing to overwrite"
+                ):
+                    replay_cli._finalize_terminal(finalizer_args)
+
+            changed_final_evidence = dict(finalizer_evidence)
+            changed_final_evidence["raw_predictions"] = mock.Mock(
+                sha256=digest("changed-raw-predictions")
+            )
+            changed_output = vault / "changed-terminal-manifest.json"
+            changed_args = argparse.Namespace(
+                **finalizer_paths,
+                output_terminal_manifest=changed_output,
+                decision="accept",
+            )
+            with (
+                mock.patch.object(
+                    replay_cli,
+                    "_load_terminal_evidence",
+                    side_effect=[finalizer_evidence, changed_final_evidence],
+                ),
+                mock.patch.object(
+                    replay_cli,
+                    "_validate_terminal_runtime_and_sources",
+                    return_value=(("a", "b"), ("c", "d"), {}),
+                ),
+                mock.patch.object(
+                    replay_cli,
+                    "_revalidate_terminal_runtime_and_sources",
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    CustodianReplayError,
+                    "evidence changed",
+                ):
+                    replay_cli._finalize_terminal(changed_args)
+            self.assertFalse(changed_output.exists())
 
         changed = copy.deepcopy(terminal)
         changed["seed"] = 1
@@ -1710,6 +2596,13 @@ class CustodianReplayArtifactTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             path = root / "raw.jsonl"
+            path.write_bytes(b"")
+            empty = custodian_replay_module.load_prediction_items_jsonl_artifact(
+                path
+            )
+            self.assertEqual(empty.items, ())
+            self.assertEqual(empty.sha256, sha256_bytes(b""))
+
             partial = self.predictions()[1:]
             path.write_bytes(
                 b"".join(canonical_json_bytes(item) for item in partial)
