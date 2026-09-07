@@ -12,7 +12,32 @@ from scripts import check_asr_progress as governance
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_TODAY = dt.date(2026, 8, 28)
+
+
+def _repository_last_updated() -> dt.date:
+    roadmap = (REPOSITORY_ROOT / governance.ROADMAP_PATH).read_text(encoding="utf-8")
+    match = re.search(
+        r"^- \*\*Last Updated:\*\* `(\d{4}-\d{2}-\d{2})`$",
+        roadmap,
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        raise RuntimeError("repository Roadmap has no parseable Last Updated date")
+    return dt.date.fromisoformat(match.group(1))
+
+
+FIXTURE_TODAY = _repository_last_updated()
+FIXTURE_MONTH = FIXTURE_TODAY.strftime("%Y-%m")
+FIXTURE_RECORD_DATE = FIXTURE_TODAY.replace(day=1).isoformat()
+PRIOR_MONTH_END = FIXTURE_TODAY.replace(day=1) - dt.timedelta(days=1)
+PRIOR_MONTH = PRIOR_MONTH_END.strftime("%Y-%m")
+PRIOR_RECORD_DATE = PRIOR_MONTH_END.isoformat()
+TWO_MONTHS_PRIOR_END = PRIOR_MONTH_END.replace(day=1) - dt.timedelta(days=1)
+TWO_MONTHS_PRIOR = TWO_MONTHS_PRIOR_END.strftime("%Y-%m")
+
+
+def _first_day_of_next_month(value: dt.date) -> dt.date:
+    return (value.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
 
 
 class AsrProgressGovernanceTest(unittest.TestCase):
@@ -222,8 +247,8 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
     def test_completion_record_must_use_registered_terminal_task(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
-        record = """\
-### 2026-08-26 — Invalid record
+        record = f"""\
+### {FIXTURE_RECORD_DATE} — Invalid record
 
 - **Task:** `OTHER-01`
 - **Status:** `In Progress`
@@ -240,7 +265,7 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         self.assertTrue(any("is not terminal" in error for error in errors), errors)
 
     def test_archive_cannot_contain_active_pointer(self) -> None:
-        archive = self.root / governance.ARCHIVE_PATH / "2026-08.md"
+        archive = self.root / governance.ARCHIVE_PATH / f"{FIXTURE_MONTH}.md"
         archive.write_text("- **Current Stage:** `BOOT`\n", encoding="utf-8")
 
         errors = self._errors()
@@ -263,7 +288,7 @@ class AsrProgressGovernanceTest(unittest.TestCase):
             if task != "UP-SYNC" and status.strip() not in {"Done", "Blocked"}
         )
         record = f"""\
-### 2026-08-26 — Premature completion
+### {FIXTURE_RECORD_DATE} — Premature completion
 
 - **Task:** `{task_id}`
 - **Status:** `Done`
@@ -357,16 +382,17 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         self.assertEqual([], self._errors())
 
     def test_prior_month_record_requires_monthly_archive(self) -> None:
-        self._insert_record(self._record("2026-07-31", "Older completion"))
+        self._insert_record(self._record(PRIOR_RECORD_DATE, "Older completion"))
 
         errors = self._errors()
 
         self.assertTrue(
-            any("belongs in archive 2026-07.md" in error for error in errors), errors
+            any(f"belongs in archive {PRIOR_MONTH}.md" in error for error in errors),
+            errors,
         )
 
     def test_calendar_rollover_does_not_trust_stale_last_updated(self) -> None:
-        september = dt.date(2026, 9, 1)
+        next_month = _first_day_of_next_month(FIXTURE_TODAY)
         active_count = len(
             governance.parse_completion_records(
                 self._read(governance.PROGRESS_PATH), "progress", []
@@ -374,20 +400,21 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
 
         errors = governance.validate_repository(
-            self.root, verify_git=False, today=september
+            self.root, verify_git=False, today=next_month
         )
-        plan = archiver.build_plan(self.root, today=september)
+        plan = archiver.build_plan(self.root, today=next_month)
 
         self.assertTrue(
-            any("belongs in archive 2026-08.md" in error for error in errors), errors
+            any(f"belongs in archive {FIXTURE_MONTH}.md" in error for error in errors),
+            errors,
         )
-        self.assertEqual({"2026-08": active_count}, plan.counts_by_month)
+        self.assertEqual({FIXTURE_MONTH: active_count}, plan.counts_by_month)
 
     def test_archive_record_month_must_match_filename(self) -> None:
-        archive = self.root / governance.ARCHIVE_PATH / "2026-06.md"
+        archive = self.root / governance.ARCHIVE_PATH / f"{TWO_MONTHS_PRIOR}.md"
         archive.write_text(
-            "# ASR Progress Archive — 2026-06\n\n"
-            + self._record("2026-07-31", "Wrong archive month"),
+            f"# ASR Progress Archive — {TWO_MONTHS_PRIOR}\n\n"
+            + self._record(PRIOR_RECORD_DATE, "Wrong archive month"),
             encoding="utf-8",
         )
 
@@ -395,8 +422,8 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "archive 2026-06.md" in error
-                and "belongs in archive 2026-07.md" in error
+                f"archive {TWO_MONTHS_PRIOR}.md" in error
+                and f"belongs in archive {PRIOR_MONTH}.md" in error
                 for error in errors
             ),
             errors,
@@ -406,9 +433,11 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         progress = self._read(governance.PROGRESS_PATH)
         records = governance.parse_completion_records(progress, "progress", [])
         self.assertGreaterEqual(len(records), 1)
-        archive = self.root / governance.ARCHIVE_PATH / "2026-08.md"
+        archive = self.root / governance.ARCHIVE_PATH / f"{FIXTURE_MONTH}.md"
         archive.write_text(
-            "# ASR Progress Archive — 2026-08\n\n" + records[0].text + "\n",
+            f"# ASR Progress Archive — {FIXTURE_MONTH}\n\n"
+            + records[0].text
+            + "\n",
             encoding="utf-8",
         )
 
@@ -418,7 +447,7 @@ class AsrProgressGovernanceTest(unittest.TestCase):
 
     def test_completion_record_outside_recent_section_is_rejected(self) -> None:
         progress = self._read(governance.PROGRESS_PATH)
-        progress += "\n" + self._record("2026-08-26", "Misplaced completion")
+        progress += "\n" + self._record(FIXTURE_RECORD_DATE, "Misplaced completion")
         self._write(governance.PROGRESS_PATH, progress)
 
         errors = self._errors()
@@ -437,18 +466,18 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
         self.assertIsNotNone(pointer_match)
         expected_pointer = pointer_match.group(0)
-        self._insert_record(self._record("2026-07-31", "Older completion"))
+        self._insert_record(self._record(PRIOR_RECORD_DATE, "Older completion"))
 
         plan = archiver.build_plan(self.root, today=FIXTURE_TODAY)
         changed = archiver.apply_plan(self.root, plan)
 
-        self.assertEqual({"2026-07": 1}, plan.counts_by_month)
+        self.assertEqual({PRIOR_MONTH: 1}, plan.counts_by_month)
         self.assertIn(self.root / governance.PROGRESS_PATH, changed)
         progress = self._read(governance.PROGRESS_PATH)
         self.assertIn(expected_pointer, progress)
         self.assertNotIn("Older completion", progress)
-        archive = self._read(governance.ARCHIVE_PATH / "2026-07.md")
-        self.assertIn("# ASR Progress Archive — 2026-07", archive)
+        archive = self._read(governance.ARCHIVE_PATH / f"{PRIOR_MONTH}.md")
+        self.assertIn(f"# ASR Progress Archive — {PRIOR_MONTH}", archive)
         self.assertIn("Older completion", archive)
         self.assertEqual([], self._errors())
 
@@ -459,7 +488,7 @@ class AsrProgressGovernanceTest(unittest.TestCase):
             )
         )
         additions = "".join(
-            self._record("2026-08-25", f"Completion {index}")
+            self._record(FIXTURE_RECORD_DATE, f"Completion {index}")
             for index in range(1, 9)
         )
         self._insert_record(additions)
@@ -474,8 +503,8 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
         self.assertEqual(governance.PROGRESS_MAX_RECORDS, len(active_records))
         archive_records = governance.parse_completion_records(
-            self._read(governance.ARCHIVE_PATH / "2026-08.md"),
-            "archive 2026-08.md",
+            self._read(governance.ARCHIVE_PATH / f"{FIXTURE_MONTH}.md"),
+            f"archive {FIXTURE_MONTH}.md",
             [],
         )
         self.assertEqual(expected_overflow, len(archive_records))
