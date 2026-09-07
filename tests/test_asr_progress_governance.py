@@ -392,6 +392,9 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
 
     def test_calendar_rollover_does_not_trust_stale_last_updated(self) -> None:
+        self._insert_record(
+            self._record(FIXTURE_RECORD_DATE, "Current-month completion")
+        )
         next_month = _first_day_of_next_month(FIXTURE_TODAY)
         active_count = len(
             governance.parse_completion_records(
@@ -430,6 +433,9 @@ class AsrProgressGovernanceTest(unittest.TestCase):
         )
 
     def test_duplicate_active_and_archived_record_is_rejected(self) -> None:
+        self._insert_record(
+            self._record(FIXTURE_RECORD_DATE, "Duplicated completion")
+        )
         progress = self._read(governance.PROGRESS_PATH)
         records = governance.parse_completion_records(progress, "progress", [])
         self.assertGreaterEqual(len(records), 1)
@@ -487,16 +493,19 @@ class AsrProgressGovernanceTest(unittest.TestCase):
                 self._read(governance.PROGRESS_PATH), "progress", []
             )
         )
+        addition_count = governance.PROGRESS_MAX_RECORDS + 1
         additions = "".join(
             self._record(FIXTURE_RECORD_DATE, f"Completion {index}")
-            for index in range(1, 9)
+            for index in range(1, addition_count + 1)
         )
         self._insert_record(additions)
 
         plan = archiver.build_plan(self.root, today=FIXTURE_TODAY)
         archiver.apply_plan(self.root, plan)
 
-        expected_overflow = initial_count + 8 - governance.PROGRESS_MAX_RECORDS
+        expected_overflow = (
+            initial_count + addition_count - governance.PROGRESS_MAX_RECORDS
+        )
         self.assertEqual(expected_overflow, len(plan.selected))
         active_records = governance.parse_completion_records(
             self._read(governance.PROGRESS_PATH), "progress", []

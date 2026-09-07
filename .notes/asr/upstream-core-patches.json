@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "baseline_ref": "v1.4.8",
-  "baseline_commit": "55b662ccf9ea77237ba9253b3bddd953d4184f84",
+  "baseline_ref": "2d2d385545698a1c216cd421666695cefbc56c32",
+  "baseline_commit": "2d2d385545698a1c216cd421666695cefbc56c32",
   "baseline_contract": "baseline_commit is the authoritative integration baseline and must be an ancestor of both develop and upstream/main. After a controlled upstream sync, advance baseline_ref and baseline_commit together to that integrated upstream commit.",
   "entry_contract": "One exact core path per entry. Record an existing roadmap task ID, explain why a downstream extension cannot work, and name changed regular tests/test_*.py unittest modules. CI executes every listed module and rejects failure, zero-test collection, or an all-skipped suite.",
   "core_patches": []

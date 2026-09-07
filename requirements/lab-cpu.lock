@@ -94,7 +94,7 @@ numba==0.67.0
     #   librosa
     #   pynndescent
     #   umap-learn
-numpy==2.4.6
+numpy==1.26.4
     # via
     #   funasr
     #   kaldiio
